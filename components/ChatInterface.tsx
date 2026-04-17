@@ -10,28 +10,41 @@ import { ReceiptCard } from "@/components/ReceiptCard";
 import {
   TransactionPreview,
   type PreviewStatus,
+  type SwapQuoteDisplay,
 } from "@/components/TransactionPreview";
 import { useTransactionStatus } from "@/components/TransactionStatusProvider";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
 import {
   buildSolTransferTx,
+  deserializeSwapTx,
   validateRecipient,
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
-import type { Intent, SendIntent } from "@/types/intent";
+import type { JupiterQuote } from "@/lib/jupiterClient";
+import type { Intent, SendIntent, SwapIntent } from "@/types/intent";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "ai";
 type MessageComponent = "portfolio" | "receipt";
 
-type ReceiptPayload = {
-  kind: "send";
-  signature: string;
-  amount: number;
-  token: string;
-  recipient: string;
-  network: SolanaNetwork;
-};
+type ReceiptPayload =
+  | {
+      kind: "send";
+      signature: string;
+      amount: number;
+      token: string;
+      recipient: string;
+      network: SolanaNetwork;
+    }
+  | {
+      kind: "swap";
+      signature: string;
+      fromAmount: number;
+      fromToken: string;
+      toAmount: number;
+      toToken: string;
+      network: SolanaNetwork;
+    };
 
 interface Message {
   id: string;
@@ -61,6 +74,14 @@ interface PreparedTx {
   blockhashInfo: { blockhash: string; lastValidBlockHeight: number };
 }
 
+interface PreparedSwap {
+  quote: JupiterQuote;
+  fromSymbol: string;
+  toSymbol: string;
+  inUiAmount: number;
+  outUiAmount: number;
+}
+
 export function ChatInterface() {
   const { connection } = useConnection();
   const { connected, publicKey, sendTransaction } = useWallet();
@@ -83,6 +104,15 @@ export function ChatInterface() {
     string | null
   >(null);
   const preparedTxRef = useRef<PreparedTx | null>(null);
+
+  const [pendingSwap, setPendingSwap] = useState<SwapIntent | null>(null);
+  const [swapPreviewStatus, setSwapPreviewStatus] =
+    useState<PreviewStatus>("building");
+  const [swapPreviewError, setSwapPreviewError] = useState<string | null>(null);
+  const [swapQuoteDisplay, setSwapQuoteDisplay] =
+    useState<SwapQuoteDisplay | null>(null);
+  const preparedSwapRef = useRef<PreparedSwap | null>(null);
+
   const orbResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -99,7 +129,7 @@ export function ChatInterface() {
     if (!pendingSend) return;
     let cancelled = false;
 
-    async function preflight(intent: SendIntent, payer: { toBase58: () => string }) {
+    async function preflight(intent: SendIntent) {
       setPreviewStatus("building");
       setPreviewError(null);
       setPreviewFeeLamports(null);
@@ -140,12 +170,11 @@ export function ChatInterface() {
         setPreviewStatus("ready");
       } catch (err) {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : "Failed to build transaction.";
+        const msg =
+          err instanceof Error ? err.message : "Failed to build transaction.";
         setPreviewError(msg);
         setPreviewStatus("error");
       }
-      // suppress unused warning for payer (kept for clarity)
-      void payer;
     }
 
     if (!publicKey) {
@@ -153,12 +182,83 @@ export function ChatInterface() {
       setPreviewStatus("error");
       return;
     }
-    preflight(pendingSend, publicKey);
+    preflight(pendingSend);
 
     return () => {
       cancelled = true;
     };
   }, [pendingSend, publicKey, connection]);
+
+  useEffect(() => {
+    if (!pendingSwap) return;
+    let cancelled = false;
+
+    async function preflightSwap(intent: SwapIntent) {
+      setSwapPreviewStatus("building");
+      setSwapPreviewError(null);
+      setSwapQuoteDisplay(null);
+      preparedSwapRef.current = null;
+
+      if (intent.fromToken.toUpperCase() === intent.toToken.toUpperCase()) {
+        if (cancelled) return;
+        setSwapPreviewError("fromToken and toToken must be different.");
+        setSwapPreviewStatus("error");
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/swap-quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fromToken: intent.fromToken,
+            toToken: intent.toToken,
+            amount: intent.amount,
+            slippageBps: intent.slippageBps ?? 50,
+          }),
+        });
+        const json = (await res.json()) as
+          | {
+              success: true;
+              data: { quote: JupiterQuote; display: SwapQuoteDisplay };
+            }
+          | { success: false; error?: string };
+
+        if (cancelled) return;
+        if (!json.success) {
+          setSwapPreviewError(json.error ?? "Failed to fetch swap quote.");
+          setSwapPreviewStatus("error");
+          return;
+        }
+        preparedSwapRef.current = {
+          quote: json.data.quote,
+          fromSymbol: json.data.display.fromSymbol,
+          toSymbol: json.data.display.toSymbol,
+          inUiAmount: json.data.display.inUiAmount,
+          outUiAmount: json.data.display.outUiAmount,
+        };
+        setSwapQuoteDisplay(json.data.display);
+        setSwapPreviewStatus("ready");
+      } catch (err) {
+        if (cancelled) return;
+        const msg =
+          err instanceof Error ? err.message : "Failed to fetch swap quote.";
+        setSwapPreviewError(msg);
+        setSwapPreviewStatus("error");
+      }
+    }
+
+    if (!publicKey) {
+      setSwapPreviewError("Connect your wallet to swap.");
+      setSwapPreviewStatus("error");
+      return;
+    }
+    preflightSwap(pendingSwap);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingSwap, publicKey]);
 
   function scheduleOrbReset(delayMs = 2000) {
     if (orbResetTimerRef.current) clearTimeout(orbResetTimerRef.current);
@@ -215,6 +315,14 @@ export function ChatInterface() {
           ts: Date.now(),
         });
         setPendingSend(data.data);
+      } else if (data.data.action === "swap") {
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: `Getting a Jupiter quote for ${data.data.amount} ${data.data.fromToken} → ${data.data.toToken}…`,
+          ts: Date.now(),
+        });
+        setPendingSwap(data.data);
       } else {
         appendMessage(intentToMessage(data.data));
       }
@@ -231,15 +339,18 @@ export function ChatInterface() {
   }
 
   function handleCancelPreview() {
+    const activeStatus = pendingSwap ? swapPreviewStatus : previewStatus;
     if (
-      previewStatus === "sending" ||
-      previewStatus === "confirming" ||
-      previewStatus === "signing"
+      activeStatus === "sending" ||
+      activeStatus === "confirming" ||
+      activeStatus === "signing"
     ) {
       return;
     }
     setPendingSend(null);
+    setPendingSwap(null);
     preparedTxRef.current = null;
+    preparedSwapRef.current = null;
     appendMessage({
       id: crypto.randomUUID(),
       role: "ai",
@@ -311,6 +422,107 @@ export function ChatInterface() {
         recipient: previewRecipientPubkey ?? intent.recipient,
         network: SOLANA_NETWORK,
       },
+      ts: Date.now(),
+    });
+  }
+
+  async function handleConfirmSwap() {
+    const prepared = preparedSwapRef.current;
+    if (!prepared || !pendingSwap || !publicKey) return;
+
+    setSwapPreviewStatus("signing");
+    setOrbStatus("processing");
+
+    let transaction: VersionedTransaction;
+    let lastValidBlockHeight: number;
+    try {
+      const res = await fetch("/api/swap-build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quote: prepared.quote,
+          userPublicKey: publicKey.toBase58(),
+        }),
+      });
+      const json = (await res.json()) as
+        | {
+            success: true;
+            data: {
+              swapTransaction: string;
+              lastValidBlockHeight: number;
+            };
+          }
+        | { success: false; error?: string };
+      if (!json.success) {
+        throw new Error(json.error ?? "Failed to build swap transaction.");
+      }
+      transaction = deserializeSwapTx(json.data.swapTransaction);
+      lastValidBlockHeight = json.data.lastValidBlockHeight;
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to build swap transaction.";
+      setSwapPreviewError(msg);
+      setSwapPreviewStatus("error");
+      setOrbStatus("error");
+      scheduleOrbReset();
+      return;
+    }
+
+    let signature: string;
+    try {
+      signature = await sendTransaction(transaction, connection);
+      setSwapPreviewStatus("confirming");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Swap rejected.";
+      setSwapPreviewError(msg);
+      setSwapPreviewStatus("error");
+      setOrbStatus("error");
+      scheduleOrbReset();
+      return;
+    }
+
+    try {
+      const blockhash = transaction.message.recentBlockhash;
+      const result = await connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed"
+      );
+      if (result.value.err) {
+        throw new Error(
+          typeof result.value.err === "string"
+            ? result.value.err
+            : "Swap failed on chain."
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Swap failed.";
+      setSwapPreviewError(msg);
+      setSwapPreviewStatus("error");
+      setOrbStatus("error");
+      scheduleOrbReset();
+      return;
+    }
+
+    const receipt: ReceiptPayload = {
+      kind: "swap",
+      signature,
+      fromAmount: prepared.inUiAmount,
+      fromToken: prepared.fromSymbol,
+      toAmount: prepared.outUiAmount,
+      toToken: prepared.toSymbol,
+      network: SOLANA_NETWORK,
+    };
+
+    setPendingSwap(null);
+    preparedSwapRef.current = null;
+    setOrbStatus("confirmed");
+    scheduleOrbReset();
+
+    appendMessage({
+      id: crypto.randomUUID(),
+      role: "ai",
+      component: "receipt",
+      receipt,
       ts: Date.now(),
     });
   }
@@ -392,7 +604,7 @@ export function ChatInterface() {
         </p>
       </div>
 
-      {pendingSend && (
+      {pendingSend ? (
         <TransactionPreview
           intent={pendingSend}
           status={previewStatus}
@@ -402,7 +614,16 @@ export function ChatInterface() {
           onConfirm={handleConfirmSend}
           onCancel={handleCancelPreview}
         />
-      )}
+      ) : pendingSwap ? (
+        <TransactionPreview
+          intent={pendingSwap}
+          status={swapPreviewStatus}
+          errorMessage={swapPreviewError}
+          quote={swapQuoteDisplay}
+          onConfirm={handleConfirmSwap}
+          onCancel={handleCancelPreview}
+        />
+      ) : null}
     </div>
   );
 }
@@ -494,7 +715,7 @@ function intentToMessage(intent: Intent): Message {
     case "swap":
       return {
         ...base,
-        text: `Preparing a swap: ${intent.amount} ${intent.fromToken} → ${intent.toToken}.`,
+        text: `Getting a Jupiter quote for ${intent.amount} ${intent.fromToken} → ${intent.toToken}…`,
       };
     case "history":
       return {
