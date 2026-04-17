@@ -7,6 +7,7 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { PortfolioCard } from "@/components/PortfolioCard";
 import { ReceiptCard } from "@/components/ReceiptCard";
+import { TransactionHistoryCard } from "@/components/TransactionHistoryCard";
 import {
   TransactionPreview,
   type PreviewStatus,
@@ -25,7 +26,7 @@ import type { Intent, SendIntent, SwapIntent } from "@/types/intent";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "ai";
-type MessageComponent = "portfolio" | "receipt";
+type MessageComponent = "portfolio" | "receipt" | "history";
 
 type ReceiptPayload =
   | {
@@ -52,6 +53,7 @@ interface Message {
   text?: string;
   component?: MessageComponent;
   receipt?: ReceiptPayload;
+  historyLimit?: number;
   ts: number;
 }
 
@@ -646,6 +648,10 @@ function MessageBubble({ message }: { message: Message }) {
         <div className="max-w-[80%] flex-1">
           <PortfolioCard />
         </div>
+      ) : message.component === "history" ? (
+        <div className="max-w-[80%] flex-1">
+          <TransactionHistoryCard limit={message.historyLimit ?? 5} />
+        </div>
       ) : message.component === "receipt" && message.receipt ? (
         <div className="max-w-[80%] flex-1">
           <ReceiptCard {...message.receipt} />
@@ -720,7 +726,8 @@ function intentToMessage(intent: Intent): Message {
     case "history":
       return {
         ...base,
-        text: `Fetching your last ${intent.limit ?? 5} transactions…`,
+        component: "history",
+        historyLimit: intent.limit ?? 5,
       };
     case "unknown":
       return { ...base, text: intent.clarification };
