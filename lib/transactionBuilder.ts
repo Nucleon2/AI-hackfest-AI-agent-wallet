@@ -97,3 +97,11 @@ export function shortAddress(address: string, head = 4, tail = 4): string {
   if (address.length <= head + tail + 1) return address;
   return `${address.slice(0, head)}…${address.slice(-tail)}`;
 }
+
+export function deserializeSwapTx(base64: string): VersionedTransaction {
+  const buf =
+    typeof Buffer !== "undefined"
+      ? Buffer.from(base64, "base64")
+      : Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return VersionedTransaction.deserialize(buf);
+}
