@@ -20,6 +20,24 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Swaps (Jupiter)
+
+Swaps go through Jupiter's aggregator at `lite-api.jup.ag/swap/v1` and
+only execute on **mainnet-beta**. Sends still work on devnet.
+
+To enable swaps in your local environment, set in `.env.local`:
+
+```env
+NEXT_PUBLIC_SOLANA_NETWORK=mainnet-beta
+NEXT_PUBLIC_SOLANA_RPC_URL=<your mainnet RPC, e.g. Helius or QuickNode>
+```
+
+On devnet the preview modal surfaces an inline warning instead of calling
+Jupiter.
+
+Supported tokens: `SOL`, `USDC`, `USDT`, `BONK`, `JUP`
+(edit `lib/tokenRegistry.ts` to add more).
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
