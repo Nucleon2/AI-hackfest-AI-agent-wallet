@@ -3,10 +3,10 @@
 import { Suspense } from "react";
 import { Canvas } from "@react-three/fiber";
 import { WalletOrb } from "./WalletOrb";
-import { useTransactionStatus } from "@/components/TransactionStatusProvider";
+import { useOrbStore } from "@/lib/stores/orbStore";
 
 export function Scene() {
-  const { status } = useTransactionStatus();
+  const status = useOrbStore((s) => s.state);
 
   return (
     <div

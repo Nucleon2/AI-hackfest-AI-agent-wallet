@@ -12,7 +12,7 @@ import {
   type PreviewStatus,
   type SwapQuoteDisplay,
 } from "@/components/TransactionPreview";
-import { useTransactionStatus } from "@/components/TransactionStatusProvider";
+import { useOrbStore } from "@/lib/stores/orbStore";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
 import {
   buildSolTransferTx,
@@ -86,7 +86,7 @@ export function ChatInterface() {
   const { connection } = useConnection();
   const { connected, publicKey, sendTransaction } = useWallet();
   const { balance } = useWalletBalance();
-  const { setStatus: setOrbStatus } = useTransactionStatus();
+  const setOrbStatus = useOrbStore((s) => s.setOrbState);
 
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [input, setInput] = useState("");
