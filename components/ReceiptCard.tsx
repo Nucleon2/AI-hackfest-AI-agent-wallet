@@ -3,22 +3,44 @@
 import { solscanUrl, type SolanaNetwork } from "@/lib/solanaClient";
 import { shortAddress } from "@/lib/transactionBuilder";
 
-interface ReceiptCardProps {
+interface BaseReceiptProps {
   signature: string;
-  amount: number;
-  token: string;
-  recipient: string;
   network: SolanaNetwork;
 }
 
-export function ReceiptCard({
-  signature,
-  amount,
-  token,
-  recipient,
-  network,
-}: ReceiptCardProps) {
-  const url = solscanUrl(signature);
+export interface SendReceiptProps extends BaseReceiptProps {
+  kind: "send";
+  amount: number;
+  token: string;
+  recipient: string;
+}
+
+export interface SwapReceiptProps extends BaseReceiptProps {
+  kind: "swap";
+  fromAmount: number;
+  fromToken: string;
+  toAmount: number;
+  toToken: string;
+}
+
+export type ReceiptCardProps = SendReceiptProps | SwapReceiptProps;
+
+function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  if (n === 0) return "0";
+  if (Math.abs(n) < 0.0001) return n.toExponential(2);
+  return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
+export function ReceiptCard(props: ReceiptCardProps) {
+  const url = solscanUrl(props.signature);
+  const label = props.kind === "swap" ? "Swap executed" : "Transaction sent";
+  const summary =
+    props.kind === "swap"
+      ? `${formatNumber(props.fromAmount)} ${props.fromToken} → ${formatNumber(
+          props.toAmount
+        )} ${props.toToken}`
+      : `${props.amount} ${props.token} → ${shortAddress(props.recipient, 4, 4)}`;
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-emerald-400/25 bg-emerald-500/5 p-4 backdrop-blur-sm">
@@ -40,21 +62,19 @@ export function ReceiptCard({
           </div>
           <div>
             <div className="text-[11px] uppercase tracking-wider text-emerald-300/70">
-              Transaction sent
+              {label}
             </div>
-            <div className="text-sm font-medium text-white">
-              {amount} {token} → {shortAddress(recipient, 4, 4)}
-            </div>
+            <div className="text-sm font-medium text-white">{summary}</div>
           </div>
         </div>
         <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] uppercase tracking-wider text-white/60">
-          {network}
+          {props.network}
         </span>
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-white/8 bg-black/20 px-3 py-2">
         <span className="truncate font-mono text-[11px] text-white/50">
-          {shortAddress(signature, 10, 10)}
+          {shortAddress(props.signature, 10, 10)}
         </span>
         <a
           href={url}

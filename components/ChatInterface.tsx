@@ -24,13 +24,14 @@ import { cn } from "@/lib/utils";
 type Role = "user" | "ai";
 type MessageComponent = "portfolio" | "receipt";
 
-interface ReceiptPayload {
+type ReceiptPayload = {
+  kind: "send";
   signature: string;
   amount: number;
   token: string;
   recipient: string;
   network: SolanaNetwork;
-}
+};
 
 interface Message {
   id: string;
@@ -303,6 +304,7 @@ export function ChatInterface() {
       role: "ai",
       component: "receipt",
       receipt: {
+        kind: "send",
         signature,
         amount: intent.amount,
         token: intent.token,
