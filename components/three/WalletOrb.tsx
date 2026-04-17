@@ -8,6 +8,9 @@ import * as THREE from "three";
 const PARTICLE_COUNT = 1500;
 const PARTICLE_RADIUS_MIN = 2.4;
 const PARTICLE_RADIUS_MAX = 3.2;
+const BURST_SCALE = 0.9;
+const BURST_RAMP_UP = 1 / 0.6;
+const BURST_RAMP_DOWN = 1 / 0.8;
 
 export type OrbState = "idle" | "processing" | "confirmed" | "error";
 
@@ -74,11 +77,14 @@ interface WalletOrbProps {
 export function WalletOrb({ state = "idle" }: WalletOrbProps) {
   const orbRef = useRef<THREE.Mesh>(null);
   const particlesRef = useRef<THREE.Points>(null);
+  const pointsMaterialRef = useRef<THREE.PointsMaterial>(null);
 
-  const particlePositions = useMemo(
+  const basePositions = useMemo(
     () => generateSphereParticles(PARTICLE_COUNT),
     []
   );
+  const livePositions = useMemo(() => basePositions.slice(), [basePositions]);
+  const burstProgress = useRef(0);
 
   const visual = ORB_VISUALS[state];
 
@@ -95,6 +101,29 @@ export function WalletOrb({ state = "idle" }: WalletOrbProps) {
     if (particlesRef.current) {
       particlesRef.current.rotation.y -= delta * 0.04 * mult;
       particlesRef.current.rotation.x += delta * 0.02 * mult;
+    }
+
+    const target = state === "confirmed" ? 1 : 0;
+    const rampRate = state === "confirmed" ? BURST_RAMP_UP : BURST_RAMP_DOWN;
+    if (burstProgress.current !== target) {
+      const step = delta * rampRate;
+      burstProgress.current =
+        target > burstProgress.current
+          ? Math.min(target, burstProgress.current + step)
+          : Math.max(target, burstProgress.current - step);
+      const eased = 1 - Math.pow(1 - burstProgress.current, 3);
+      const scale = 1 + eased * BURST_SCALE;
+      for (let i = 0; i < livePositions.length; i++) {
+        livePositions[i] = basePositions[i] * scale;
+      }
+      if (particlesRef.current) {
+        const attr = particlesRef.current.geometry.attributes
+          .position as THREE.BufferAttribute;
+        attr.needsUpdate = true;
+      }
+      if (pointsMaterialRef.current) {
+        pointsMaterialRef.current.opacity = 0.8 - eased * 0.5;
+      }
     }
   });
 
@@ -115,13 +144,14 @@ export function WalletOrb({ state = "idle" }: WalletOrbProps) {
         <bufferGeometry>
           <bufferAttribute
             attach="attributes-position"
-            args={[particlePositions, 3]}
+            args={[livePositions, 3]}
             count={PARTICLE_COUNT}
-            array={particlePositions}
+            array={livePositions}
             itemSize={3}
           />
         </bufferGeometry>
         <pointsMaterial
+          ref={pointsMaterialRef}
           size={0.02}
           color={visual.particleColor}
           transparent
