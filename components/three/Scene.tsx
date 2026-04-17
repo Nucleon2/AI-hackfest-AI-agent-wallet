@@ -3,8 +3,11 @@
 import { Suspense } from "react";
 import { Canvas } from "@react-three/fiber";
 import { WalletOrb } from "./WalletOrb";
+import { useTransactionStatus } from "@/components/TransactionStatusProvider";
 
 export function Scene() {
+  const { status } = useTransactionStatus();
+
   return (
     <div
       aria-hidden
@@ -20,7 +23,7 @@ export function Scene() {
         <pointLight position={[5, 5, 5]} intensity={1.2} />
         <pointLight position={[-5, -3, -2]} intensity={0.5} color="#818cf8" />
         <Suspense fallback={null}>
-          <WalletOrb />
+          <WalletOrb state={status} />
         </Suspense>
       </Canvas>
     </div>

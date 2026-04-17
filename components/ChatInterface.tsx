@@ -1,17 +1,43 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import type { VersionedTransaction } from "@solana/web3.js";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { BorderBeam } from "@/components/ui/border-beam";
+import { PortfolioCard } from "@/components/PortfolioCard";
+import { ReceiptCard } from "@/components/ReceiptCard";
+import {
+  TransactionPreview,
+  type PreviewStatus,
+} from "@/components/TransactionPreview";
+import { useTransactionStatus } from "@/components/TransactionStatusProvider";
+import { useWalletBalance } from "@/hooks/useWalletBalance";
+import {
+  buildSolTransferTx,
+  validateRecipient,
+} from "@/lib/transactionBuilder";
+import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
+import type { Intent, SendIntent } from "@/types/intent";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "ai";
+type MessageComponent = "portfolio" | "receipt";
+
+interface ReceiptPayload {
+  signature: string;
+  amount: number;
+  token: string;
+  recipient: string;
+  network: SolanaNetwork;
+}
 
 interface Message {
   id: string;
   role: Role;
-  text: string;
+  text?: string;
+  component?: MessageComponent;
+  receipt?: ReceiptPayload;
   ts: number;
 }
 
@@ -29,17 +55,121 @@ const SUGGESTIONS = [
   "Show my last 5 transactions",
 ];
 
+interface PreparedTx {
+  transaction: VersionedTransaction;
+  blockhashInfo: { blockhash: string; lastValidBlockHeight: number };
+}
+
 export function ChatInterface() {
-  const { connected } = useWallet();
+  const { connection } = useConnection();
+  const { connected, publicKey, sendTransaction } = useWallet();
+  const { balance } = useWalletBalance();
+  const { setStatus: setOrbStatus } = useTransactionStatus();
+
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  const [pendingSend, setPendingSend] = useState<SendIntent | null>(null);
+  const [previewStatus, setPreviewStatus] = useState<PreviewStatus>("building");
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewFeeLamports, setPreviewFeeLamports] = useState<number | null>(
+    null
+  );
+  const [previewRecipientPubkey, setPreviewRecipientPubkey] = useState<
+    string | null
+  >(null);
+  const preparedTxRef = useRef<PreparedTx | null>(null);
+  const orbResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      if (orbResetTimerRef.current) clearTimeout(orbResetTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pendingSend) return;
+    let cancelled = false;
+
+    async function preflight(intent: SendIntent, payer: { toBase58: () => string }) {
+      setPreviewStatus("building");
+      setPreviewError(null);
+      setPreviewFeeLamports(null);
+      setPreviewRecipientPubkey(null);
+      preparedTxRef.current = null;
+
+      if (intent.token.toUpperCase() !== "SOL") {
+        if (cancelled) return;
+        setPreviewError("Only SOL sends are supported right now.");
+        setPreviewStatus("error");
+        return;
+      }
+
+      const validation = validateRecipient(intent.recipient);
+      if (!validation.ok) {
+        if (cancelled) return;
+        setPreviewError(validation.error);
+        setPreviewStatus("error");
+        return;
+      }
+
+      try {
+        const fromPubkey = publicKey;
+        if (!fromPubkey) throw new Error("Wallet not connected.");
+        const built = await buildSolTransferTx({
+          connection,
+          from: fromPubkey,
+          to: validation.pubkey,
+          amountSol: intent.amount,
+        });
+        if (cancelled) return;
+        preparedTxRef.current = {
+          transaction: built.transaction,
+          blockhashInfo: built.blockhashInfo,
+        };
+        setPreviewFeeLamports(built.feeLamports);
+        setPreviewRecipientPubkey(validation.pubkey.toBase58());
+        setPreviewStatus("ready");
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : "Failed to build transaction.";
+        setPreviewError(msg);
+        setPreviewStatus("error");
+      }
+      // suppress unused warning for payer (kept for clarity)
+      void payer;
+    }
+
+    if (!publicKey) {
+      setPreviewError("Connect your wallet to send.");
+      setPreviewStatus("error");
+      return;
+    }
+    preflight(pendingSend, publicKey);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingSend, publicKey, connection]);
+
+  function scheduleOrbReset(delayMs = 2000) {
+    if (orbResetTimerRef.current) clearTimeout(orbResetTimerRef.current);
+    orbResetTimerRef.current = setTimeout(() => {
+      setOrbStatus("idle");
+      orbResetTimerRef.current = null;
+    }, delayMs);
+  }
+
+  function appendMessage(msg: Message) {
+    setMessages((prev) => [...prev, msg]);
+  }
 
   async function send(text: string) {
     const trimmed = text.trim();
@@ -56,34 +186,131 @@ export function ChatInterface() {
     setBusy(true);
 
     try {
+      const walletContext = {
+        publicKey: publicKey?.toBase58(),
+        solBalance: balance ?? undefined,
+      };
       const res = await fetch("/api/parse-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed }),
+        body: JSON.stringify({ message: trimmed, walletContext }),
       });
-      const data = await res.json();
-      const aiMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "ai",
-        text: data.success
-          ? formatIntent(data.data)
-          : (data.error ?? "Something went wrong."),
-        ts: Date.now(),
-      };
-      setMessages((prev) => [...prev, aiMsg]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
+      const data = (await res.json()) as
+        | { success: true; data: Intent }
+        | { success: false; error?: string };
+
+      if (!data.success) {
+        appendMessage({
           id: crypto.randomUUID(),
           role: "ai",
-          text: "Couldn't reach the AI. Check your API key in .env.local.",
+          text: data.error ?? "Something went wrong.",
           ts: Date.now(),
-        },
-      ]);
+        });
+      } else if (data.data.action === "send") {
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: `Let's confirm this send of ${data.data.amount} ${data.data.token}.`,
+          ts: Date.now(),
+        });
+        setPendingSend(data.data);
+      } else {
+        appendMessage(intentToMessage(data.data));
+      }
+    } catch {
+      appendMessage({
+        id: crypto.randomUUID(),
+        role: "ai",
+        text: "Couldn't reach the AI. Check your API key in .env.local.",
+        ts: Date.now(),
+      });
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleCancelPreview() {
+    if (
+      previewStatus === "sending" ||
+      previewStatus === "confirming" ||
+      previewStatus === "signing"
+    ) {
+      return;
+    }
+    setPendingSend(null);
+    preparedTxRef.current = null;
+    appendMessage({
+      id: crypto.randomUUID(),
+      role: "ai",
+      text: "Cancelled. No transaction was sent.",
+      ts: Date.now(),
+    });
+  }
+
+  async function handleConfirmSend() {
+    const prepared = preparedTxRef.current;
+    const intent = pendingSend;
+    if (!prepared || !intent || !publicKey) return;
+
+    setPreviewStatus("signing");
+    setOrbStatus("processing");
+
+    let signature: string;
+    try {
+      signature = await sendTransaction(prepared.transaction, connection);
+      setPreviewStatus("confirming");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Transaction rejected.";
+      setPreviewError(msg);
+      setPreviewStatus("error");
+      setOrbStatus("error");
+      scheduleOrbReset();
+      return;
+    }
+
+    try {
+      const result = await connection.confirmTransaction(
+        {
+          signature,
+          blockhash: prepared.blockhashInfo.blockhash,
+          lastValidBlockHeight: prepared.blockhashInfo.lastValidBlockHeight,
+        },
+        "confirmed"
+      );
+      if (result.value.err) {
+        throw new Error(
+          typeof result.value.err === "string"
+            ? result.value.err
+            : "Transaction failed on chain."
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Transaction failed.";
+      setPreviewError(msg);
+      setPreviewStatus("error");
+      setOrbStatus("error");
+      scheduleOrbReset();
+      return;
+    }
+
+    setPendingSend(null);
+    preparedTxRef.current = null;
+    setOrbStatus("confirmed");
+    scheduleOrbReset();
+
+    appendMessage({
+      id: crypto.randomUUID(),
+      role: "ai",
+      component: "receipt",
+      receipt: {
+        signature,
+        amount: intent.amount,
+        token: intent.token,
+        recipient: previewRecipientPubkey ?? intent.recipient,
+        network: SOLANA_NETWORK,
+      },
+      ts: Date.now(),
+    });
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -162,6 +389,18 @@ export function ChatInterface() {
           Shift+Enter for new line · Enter to send
         </p>
       </div>
+
+      {pendingSend && (
+        <TransactionPreview
+          intent={pendingSend}
+          status={previewStatus}
+          errorMessage={previewError}
+          feeLamports={previewFeeLamports}
+          recipientPubkey={previewRecipientPubkey}
+          onConfirm={handleConfirmSend}
+          onCancel={handleCancelPreview}
+        />
+      )}
     </div>
   );
 }
@@ -180,16 +419,26 @@ function MessageBubble({ message }: { message: Message }) {
       >
         {isUser ? "U" : "AI"}
       </div>
-      <div
-        className={cn(
-          "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
-          isUser
-            ? "rounded-tr-sm bg-indigo-600/20 text-white/90 border border-indigo-500/20"
-            : "rounded-tl-sm bg-white/5 text-white/75 border border-white/8"
-        )}
-      >
-        {message.text}
-      </div>
+      {message.component === "portfolio" ? (
+        <div className="max-w-[80%] flex-1">
+          <PortfolioCard />
+        </div>
+      ) : message.component === "receipt" && message.receipt ? (
+        <div className="max-w-[80%] flex-1">
+          <ReceiptCard {...message.receipt} />
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
+            isUser
+              ? "rounded-tr-sm bg-indigo-600/20 text-white/90 border border-indigo-500/20"
+              : "rounded-tl-sm bg-white/5 text-white/75 border border-white/8"
+          )}
+        >
+          {message.text}
+        </div>
+      )}
     </div>
   );
 }
@@ -230,20 +479,27 @@ function SendIcon() {
   );
 }
 
-function formatIntent(intent: Record<string, unknown>): string {
-  const action = intent.action as string;
-  switch (action) {
+function intentToMessage(intent: Intent): Message {
+  const base = { id: crypto.randomUUID(), role: "ai" as const, ts: Date.now() };
+  switch (intent.action) {
     case "balance":
-      return `Fetching your ${intent.token ? (intent.token as string) : "wallet"} balance…`;
+      return { ...base, component: "portfolio" };
     case "send":
-      return `Got it! Preparing to send ${intent.amount} ${intent.token} to ${intent.recipient}.`;
+      return {
+        ...base,
+        text: `Got it! Preparing to send ${intent.amount} ${intent.token} to ${intent.recipient}.`,
+      };
     case "swap":
-      return `Preparing a swap: ${intent.amount} ${intent.fromToken} → ${intent.toToken}.`;
+      return {
+        ...base,
+        text: `Preparing a swap: ${intent.amount} ${intent.fromToken} → ${intent.toToken}.`,
+      };
     case "history":
-      return `Fetching your last ${intent.limit ?? 5} transactions…`;
+      return {
+        ...base,
+        text: `Fetching your last ${intent.limit ?? 5} transactions…`,
+      };
     case "unknown":
-      return (intent.clarification as string) ?? "I didn't understand that.";
-    default:
-      return JSON.stringify(intent, null, 2);
+      return { ...base, text: intent.clarification };
   }
 }

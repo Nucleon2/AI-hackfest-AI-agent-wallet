@@ -6,6 +6,7 @@ import { PortfolioCard } from "@/components/PortfolioCard";
 import { ChatInterface } from "@/components/ChatInterface";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { ShineBorder } from "@/components/ui/shine-border";
+import { TransactionStatusProvider } from "@/components/TransactionStatusProvider";
 
 const Scene = dynamic(
   () => import("@/components/three/Scene").then((m) => m.Scene),
@@ -14,7 +15,7 @@ const Scene = dynamic(
 
 export default function Home() {
   return (
-    <>
+    <TransactionStatusProvider>
       <Scene />
 
       <main className="relative z-10 flex h-screen flex-col overflow-hidden">
@@ -57,6 +58,6 @@ export default function Home() {
           </div>
         </div>
       </main>
-    </>
+    </TransactionStatusProvider>
   );
 }
