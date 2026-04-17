@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { MeshDistortMaterial } from "@react-three/drei";
@@ -11,6 +12,12 @@ const PARTICLE_RADIUS_MAX = 3.2;
 const BURST_SCALE = 0.9;
 const BURST_RAMP_UP = 1 / 0.6;
 const BURST_RAMP_DOWN = 1 / 0.8;
+const VISUAL_SMOOTHING = 6;
+
+type DistortMaterial = THREE.MeshStandardMaterial & {
+  distort: number;
+  speed: number;
+};
 
 export type OrbState = "idle" | "processing" | "confirmed" | "error";
 
@@ -78,6 +85,7 @@ export function WalletOrb({ state = "idle" }: WalletOrbProps) {
   const orbRef = useRef<THREE.Mesh>(null);
   const particlesRef = useRef<THREE.Points>(null);
   const pointsMaterialRef = useRef<THREE.PointsMaterial>(null);
+  const distortMaterialRef = useRef<DistortMaterial>(null);
 
   const basePositions = useMemo(
     () => generateSphereParticles(PARTICLE_COUNT),
@@ -86,10 +94,35 @@ export function WalletOrb({ state = "idle" }: WalletOrbProps) {
   const livePositions = useMemo(() => basePositions.slice(), [basePositions]);
   const burstProgress = useRef(0);
 
+  const idleVisual = ORB_VISUALS.idle;
+  const currentDistort = useRef(idleVisual.distort);
+  const currentSpeed = useRef(idleVisual.speed);
+  const currentMult = useRef(idleVisual.rotationMultiplier);
+  const targetOrbColor = useMemo(() => new THREE.Color(), []);
+  const targetParticleColor = useMemo(() => new THREE.Color(), []);
+
   const visual = ORB_VISUALS[state];
 
   useFrame((_, delta) => {
-    const mult = visual.rotationMultiplier;
+    const t = Math.min(1, delta * VISUAL_SMOOTHING);
+
+    currentDistort.current += (visual.distort - currentDistort.current) * t;
+    currentSpeed.current += (visual.speed - currentSpeed.current) * t;
+    currentMult.current +=
+      (visual.rotationMultiplier - currentMult.current) * t;
+
+    if (distortMaterialRef.current) {
+      distortMaterialRef.current.distort = currentDistort.current;
+      distortMaterialRef.current.speed = currentSpeed.current;
+      targetOrbColor.set(visual.color);
+      distortMaterialRef.current.color.lerp(targetOrbColor, t);
+    }
+    if (pointsMaterialRef.current) {
+      targetParticleColor.set(visual.particleColor);
+      pointsMaterialRef.current.color.lerp(targetParticleColor, t);
+    }
+
+    const mult = currentMult.current;
     if (orbRef.current) {
       orbRef.current.rotation.y += delta * 0.15 * mult;
       orbRef.current.rotation.x += delta * 0.05 * mult;
@@ -132,9 +165,11 @@ export function WalletOrb({ state = "idle" }: WalletOrbProps) {
       <mesh ref={orbRef}>
         <icosahedronGeometry args={[1.4, 16]} />
         <MeshDistortMaterial
-          color={visual.color}
-          distort={visual.distort}
-          speed={visual.speed}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ref={distortMaterialRef as unknown as React.Ref<any>}
+          color={idleVisual.color}
+          distort={idleVisual.distort}
+          speed={idleVisual.speed}
           roughness={0.2}
           metalness={0.4}
         />
