@@ -5,6 +5,8 @@ export interface TokenInfo {
 }
 
 export const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+export const MSOL_MINT = "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So";
+export const JITOSOL_MINT = "J1toso1uCk3jxNMstqoZywrqKVV9PXqsBpsWRCa92Fs";
 
 export const TOKEN_REGISTRY: Record<string, TokenInfo> = {
   SOL: { symbol: "SOL", mint: WRAPPED_SOL_MINT, decimals: 9 },
@@ -27,6 +29,16 @@ export const TOKEN_REGISTRY: Record<string, TokenInfo> = {
     symbol: "JUP",
     mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
     decimals: 6,
+  },
+  MSOL: {
+    symbol: "mSOL",
+    mint: MSOL_MINT,
+    decimals: 9,
+  },
+  JITOSOL: {
+    symbol: "JitoSOL",
+    mint: JITOSOL_MINT,
+    decimals: 9,
   },
 };
 
