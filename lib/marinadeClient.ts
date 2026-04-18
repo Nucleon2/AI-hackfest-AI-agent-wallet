@@ -24,12 +24,11 @@ function makeMarinade(connection: Connection, owner: PublicKey): Marinade {
   return new Marinade(config);
 }
 
-// Marinade's SDK returns a legacy Transaction whose instructions reference
-// the Marinade program's address lookup table. Repacking the instructions
-// into a v0 message without the LUT produced transactions that failed
-// simulation, so we preserve the original legacy Transaction and attach a
-// fresh blockhash + fee payer — the wallet adapter's sendTransaction
-// accepts legacy Transactions directly.
+// Marinade's SDK returns a fully-formed legacy Transaction. Preserve it
+// as-is and only attach a fresh blockhash + fee payer — replaying the
+// instructions into a v0 message risked dropping SDK-set signer metadata
+// (e.g. ephemeral stake-account signers on some paths). The wallet
+// adapter's sendTransaction accepts legacy Transactions directly.
 async function finalizeTx(
   connection: Connection,
   payer: PublicKey,

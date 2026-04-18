@@ -107,9 +107,13 @@ export function deserializeSwapTx(base64: string): VersionedTransaction {
   return VersionedTransaction.deserialize(buf);
 }
 
-// Marinade's SDK emits legacy Transactions that reference the program's
-// address lookup table. We serialize and transport them unchanged so the
-// LUT references survive the round-trip to the wallet adapter.
+// Marinade's SDK emits fully-formed legacy Transactions. We serialize
+// and transport them verbatim rather than repacking into a v0 message,
+// because replaying the instructions strips metadata the SDK expects
+// (exact signer ordering, compute-budget placement) and risks a silent
+// drift between what the preview builds and what the wallet signs.
+// The wallet adapter's sendTransaction accepts legacy Transactions
+// directly, so there's no upside to converting.
 export function deserializeLegacyTx(base64: string): Transaction {
   const buf =
     typeof Buffer !== "undefined"
