@@ -9,7 +9,7 @@ import { useStakingStatus, type StakingStatus } from "@/hooks/useStakingStatus";
 import { cn } from "@/lib/utils";
 
 interface StakingCardProps {
-  onUnstakeRequest?: (provider: "marinade" | "jito") => void;
+  onUnstakeRequest?: (provider: "marinade" | "jito", amount: number) => void;
 }
 
 export function StakingCard({ onUnstakeRequest }: StakingCardProps) {
@@ -80,7 +80,9 @@ export function StakingCard({ onUnstakeRequest }: StakingCardProps) {
                 apy={status!.apy}
                 dailyYieldSol={status!.estimatedDailyYieldSol}
                 monthlyYieldSol={status!.estimatedMonthlyYieldSol}
-                onUnstake={() => onUnstakeRequest?.("marinade")}
+                onUnstake={() =>
+                  onUnstakeRequest?.("marinade", status!.msolBalance)
+                }
               />
             )}
             {status!.jitoBalance > 0 && (
@@ -95,7 +97,9 @@ export function StakingCard({ onUnstakeRequest }: StakingCardProps) {
                 monthlyYieldSol={
                   (status!.jitoBalance * status!.jitoApy * 30) / 365
                 }
-                onUnstake={() => onUnstakeRequest?.("jito")}
+                onUnstake={() =>
+                  onUnstakeRequest?.("jito", status!.jitoBalance)
+                }
               />
             )}
           </div>
