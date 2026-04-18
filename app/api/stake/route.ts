@@ -6,6 +6,7 @@ import {
   buildMarinadeLiquidUnstakeTx,
   fetchMarinadeApy,
   fetchMsolPrice,
+  fetchUnstakeFeePct,
 } from "@/lib/marinadeClient";
 
 export const runtime = "nodejs";
@@ -13,12 +14,27 @@ export const runtime = "nodejs";
 type StakeAction = "stake" | "unstake";
 type Provider = "marinade" | "jito";
 
+// Cap at 1000 SOL/mSOL per request. Prevents malformed requests from
+// constructing a BN the SDK can't handle and nudges any UI bug that
+// forwards an unchecked value.
+const MAX_AMOUNT = 1000;
+
 interface RequestBody {
   action?: unknown;
   amount?: unknown;
   provider?: unknown;
   userPublicKey?: unknown;
   preview?: unknown;
+}
+
+interface DisplayPayload {
+  action: StakeAction;
+  provider: Provider;
+  inputAmount: number;
+  outputAmount: number;
+  mSolPrice: number;
+  apy: number;
+  feePct: number;
 }
 
 function fail(status: number, error: string) {
@@ -31,6 +47,22 @@ function asAction(v: unknown): StakeAction | null {
 
 function asProvider(v: unknown): Provider | null {
   return v === "marinade" || v === "jito" ? v : null;
+}
+
+function buildDisplay(args: {
+  action: StakeAction;
+  provider: Provider;
+  inputAmount: number;
+  mSolPrice: number;
+  apy: number;
+  feePct: number;
+}): DisplayPayload {
+  const { action, inputAmount, mSolPrice, feePct } = args;
+  const outputAmount =
+    action === "stake"
+      ? inputAmount / mSolPrice
+      : inputAmount * mSolPrice * (1 - feePct / 100);
+  return { ...args, outputAmount };
 }
 
 export async function POST(req: NextRequest) {
@@ -60,6 +92,9 @@ export async function POST(req: NextRequest) {
   if (!action) return fail(400, "action must be \"stake\" or \"unstake\".");
   if (!provider) return fail(400, "provider must be \"marinade\" or \"jito\".");
   if (amount === null) return fail(400, "amount must be a positive number.");
+  if (amount > MAX_AMOUNT) {
+    return fail(400, `amount exceeds the ${MAX_AMOUNT} per-request cap.`);
+  }
   if (!userPublicKey) return fail(400, "userPublicKey is required.");
 
   if (provider === "jito") {
@@ -77,28 +112,25 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const [apy, mSolPrice] = await Promise.all([
+    const [apy, mSolPrice, feePct] = await Promise.all([
       fetchMarinadeApy(),
       fetchMsolPrice(connection, owner),
+      action === "unstake"
+        ? fetchUnstakeFeePct(connection, owner, amount)
+        : Promise.resolve(0),
     ]);
 
+    const display = buildDisplay({
+      action,
+      provider,
+      inputAmount: amount,
+      mSolPrice,
+      apy,
+      feePct,
+    });
+
     if (preview) {
-      const outputAmount =
-        action === "stake" ? amount / mSolPrice : amount * mSolPrice * 0.997;
-      return NextResponse.json({
-        success: true,
-        data: {
-          display: {
-            action,
-            provider,
-            inputAmount: amount,
-            outputAmount,
-            mSolPrice,
-            apy,
-            feePct: action === "unstake" ? 0.3 : 0,
-          },
-        },
-      });
+      return NextResponse.json({ success: true, data: { display } });
     }
 
     const built =
@@ -106,24 +138,16 @@ export async function POST(req: NextRequest) {
         ? await buildMarinadeDepositTx(connection, owner, amount)
         : await buildMarinadeLiquidUnstakeTx(connection, owner, amount);
 
-    const serialized = Buffer.from(built.transaction.serialize()).toString("base64");
-    const outputAmount =
-      action === "stake" ? amount / mSolPrice : amount * mSolPrice * 0.997;
+    const serialized = built.transaction
+      .serialize({ requireAllSignatures: false, verifySignatures: false })
+      .toString("base64");
 
     return NextResponse.json({
       success: true,
       data: {
         stakeTransaction: serialized,
         lastValidBlockHeight: built.blockhashInfo.lastValidBlockHeight,
-        display: {
-          action,
-          provider,
-          inputAmount: amount,
-          outputAmount,
-          mSolPrice,
-          apy,
-          feePct: action === "unstake" ? 0.3 : 0,
-        },
+        display,
       },
     });
   } catch (err) {
