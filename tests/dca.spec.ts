@@ -3,6 +3,9 @@ import { test, expect } from "@playwright/test";
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3001";
 // Use a throwaway-but-valid base58 wallet (the system program id) for DB writes
 const TEST_WALLET = "11111111111111111111111111111112";
+// Claude-backed tests are skipped when the key is absent so CI/dev without
+// the secret (or behind network restrictions) stays green.
+const HAS_ANTHROPIC_KEY = Boolean(process.env.ANTHROPIC_API_KEY);
 
 test.describe("DCA orders API", () => {
   test("creates and lists an active DCA order", async ({ request }) => {
@@ -122,6 +125,7 @@ test.describe("Price alerts API", () => {
   });
 
   test("parse-intent recognises DCA phrasing", async ({ request }) => {
+    test.skip(!HAS_ANTHROPIC_KEY, "ANTHROPIC_API_KEY not set");
     const res = await request.post(`${BASE_URL}/api/parse-intent`, {
       data: { message: "buy $20 of SOL every Monday" },
     });
@@ -137,6 +141,7 @@ test.describe("Price alerts API", () => {
   });
 
   test("parse-intent recognises price alert phrasing", async ({ request }) => {
+    test.skip(!HAS_ANTHROPIC_KEY, "ANTHROPIC_API_KEY not set");
     const res = await request.post(`${BASE_URL}/api/parse-intent`, {
       data: { message: "alert me when SOL drops below $150" },
     });
