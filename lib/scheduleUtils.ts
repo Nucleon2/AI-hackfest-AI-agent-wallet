@@ -79,14 +79,14 @@ function parseScheduledDate(
   return nowMs + 24 * 60 * 60 * 1000;
 }
 
-function startOfTomorrow(nowMs: number): number {
+export function startOfTomorrow(nowMs: number): number {
   const d = new Date(nowMs);
   d.setUTCDate(d.getUTCDate() + 1);
   d.setUTCHours(0, 0, 0, 0);
   return d.getTime();
 }
 
-function nextWeekday(targetDay: number, nowMs: number): number {
+export function nextWeekday(targetDay: number, nowMs: number): number {
   const d = new Date(nowMs);
   const current = d.getUTCDay();
   let daysUntil = (targetDay - current + 7) % 7;
@@ -96,7 +96,7 @@ function nextWeekday(targetDay: number, nowMs: number): number {
   return d.getTime();
 }
 
-function nextMonthSameDay(nowMs: number): number {
+export function nextMonthSameDay(nowMs: number): number {
   const d = new Date(nowMs);
   const year = d.getUTCFullYear();
   const month = d.getUTCMonth();
@@ -107,7 +107,7 @@ function nextMonthSameDay(nowMs: number): number {
   return Date.UTC(nextYear, nextMonth, Math.min(day, maxDay));
 }
 
-function addOneMonth(tsMs: number): number {
+export function addOneMonth(tsMs: number): number {
   const d = new Date(tsMs);
   const year = d.getUTCFullYear();
   const month = d.getUTCMonth();

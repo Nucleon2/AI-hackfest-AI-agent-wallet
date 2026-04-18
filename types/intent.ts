@@ -18,7 +18,13 @@ export type IntentAction =
   | "set_drift_threshold"
   | "stake"
   | "unstake"
-  | "staking_status";
+  | "staking_status"
+  | "explain_tx"
+  | "spending_insights"
+  | "dca"
+  | "view_dca"
+  | "cancel_dca"
+  | "price_alert";
 
 export type StakingProvider = "marinade" | "jito";
 
@@ -87,6 +93,15 @@ export interface ResumePortfolioIntent {
 export interface SetDriftThresholdIntent {
   action: "set_drift_threshold";
   threshold: number;
+}
+
+export interface ExplainTxIntent {
+  action: "explain_tx";
+  signature: string;
+}
+
+export interface SpendingInsightsIntent {
+  action: "spending_insights";
 }
 
 export interface SendIntent {
@@ -205,6 +220,59 @@ export interface StakingStatusIntent {
   action: "staking_status";
 }
 
+export interface DCAIntent {
+  action: "dca";
+  inputToken: string;
+  outputToken: string;
+  amountUsd: number;
+  interval: "daily" | "weekly" | "monthly";
+  duration?: number;
+  day_of_week?: string;
+}
+
+export interface ViewDCAIntent {
+  action: "view_dca";
+}
+
+export interface CancelDCAIntent {
+  action: "cancel_dca";
+  id: string;
+}
+
+export interface PriceAlertIntent {
+  action: "price_alert";
+  token: string;
+  targetPrice: number;
+  direction: "above" | "below";
+}
+
+export interface DCAOrder {
+  id: string;
+  wallet_pubkey: string;
+  input_token: string;
+  output_token: string;
+  amount_usd: number;
+  interval: "daily" | "weekly" | "monthly";
+  day_of_week: number | null;
+  next_run_at: number;
+  runs_completed: number;
+  max_runs: number | null;
+  is_active: number;
+  created_at: number;
+  last_executed_at: number | null;
+}
+
+export interface PriceAlert {
+  id: string;
+  wallet_pubkey: string;
+  token: string;
+  target_price: number;
+  direction: "above" | "below";
+  is_triggered: number;
+  created_at: number;
+  triggered_at: number | null;
+}
+
 export type Intent =
   | SendIntent
   | SwapIntent
@@ -225,7 +293,13 @@ export type Intent =
   | SetDriftThresholdIntent
   | StakeIntent
   | UnstakeIntent
-  | StakingStatusIntent;
+  | StakingStatusIntent
+  | ExplainTxIntent
+  | SpendingInsightsIntent
+  | DCAIntent
+  | ViewDCAIntent
+  | CancelDCAIntent
+  | PriceAlertIntent;
 
 export interface WalletContext {
   publicKey?: string;
@@ -322,6 +396,35 @@ export function isIntent(value: unknown): value is Intent {
       );
     case "staking_status":
       return true;
+    case "explain_tx":
+      return typeof value.signature === "string" && value.signature.length > 0;
+    case "spending_insights":
+      return true;
+    case "dca":
+      return (
+        typeof value.inputToken === "string" &&
+        typeof value.outputToken === "string" &&
+        typeof value.amountUsd === "number" &&
+        value.amountUsd > 0 &&
+        (value.interval === "daily" ||
+          value.interval === "weekly" ||
+          value.interval === "monthly") &&
+        (value.duration === undefined ||
+          (Number.isInteger(value.duration) && (value.duration as number) > 0)) &&
+        (value.day_of_week === undefined ||
+          (typeof value.day_of_week === "string" && value.interval === "weekly"))
+      );
+    case "view_dca":
+      return true;
+    case "cancel_dca":
+      return typeof value.id === "string";
+    case "price_alert":
+      return (
+        typeof value.token === "string" &&
+        typeof value.targetPrice === "number" &&
+        value.targetPrice > 0 &&
+        (value.direction === "above" || value.direction === "below")
+      );
     default:
       return false;
   }

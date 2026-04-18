@@ -96,6 +96,37 @@ export function getDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_portfolio_wallet
       ON portfolio_configs (wallet_pubkey);
+
+    CREATE TABLE IF NOT EXISTS dca_orders (
+      id                TEXT PRIMARY KEY,
+      wallet_pubkey     TEXT NOT NULL,
+      input_token       TEXT NOT NULL,
+      output_token      TEXT NOT NULL,
+      amount_usd        REAL NOT NULL,
+      interval          TEXT NOT NULL,
+      day_of_week       INTEGER,
+      next_run_at       INTEGER NOT NULL,
+      runs_completed    INTEGER NOT NULL DEFAULT 0,
+      max_runs          INTEGER,
+      is_active         INTEGER NOT NULL DEFAULT 1,
+      created_at        INTEGER NOT NULL,
+      last_executed_at  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_dca_orders_wallet
+      ON dca_orders (wallet_pubkey, is_active, next_run_at);
+
+    CREATE TABLE IF NOT EXISTS price_alerts (
+      id             TEXT PRIMARY KEY,
+      wallet_pubkey  TEXT NOT NULL,
+      token          TEXT NOT NULL,
+      target_price   REAL NOT NULL,
+      direction      TEXT NOT NULL,
+      is_triggered   INTEGER NOT NULL DEFAULT 0,
+      created_at     INTEGER NOT NULL,
+      triggered_at   INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_price_alerts_wallet
+      ON price_alerts (wallet_pubkey, is_triggered);
   `);
   return _db;
 }
