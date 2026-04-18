@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { PortfolioConfig } from "@/types/intent";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
+import { useStakingStatus } from "@/hooks/useStakingStatus";
 import { useChatSessionStore } from "@/lib/stores/chatSessionStore";
 import { useChatSessions } from "@/hooks/useChatSessions";
 import { NumberTicker } from "@/components/ui/number-ticker";
@@ -31,6 +32,7 @@ export function Sidebar() {
   const { sessions, activeSessionId, setActiveSessionId } = useChatSessionStore();
   const { createSession, deleteSession } = useChatSessions(publicKey?.toBase58() ?? null);
   const [portfolioConfig, setPortfolioConfig] = useState<PortfolioConfig | null>(null);
+  const { status: stakingStatus } = useStakingStatus();
 
   useEffect(() => {
     if (!publicKey) { setPortfolioConfig(null); return; }
@@ -151,6 +153,39 @@ export function Sidebar() {
                 Last rebalanced {relativeTime(portfolioConfig.last_rebalanced_at)}
               </p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Staking */}
+      {connected && stakingStatus &&
+        (stakingStatus.msolBalance > 0 || stakingStatus.jitoBalance > 0) && (
+        <div className="border-b border-white/[0.06] px-4 py-4">
+          <p className="mb-3 px-2 text-[10px] uppercase tracking-[0.15em] text-white/25">Staking</p>
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5">
+            {stakingStatus.msolBalance > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-white/60">
+                  {stakingStatus.msolBalance.toFixed(4)} mSOL
+                </span>
+                <span className="text-[10px] font-medium text-emerald-400">
+                  {(stakingStatus.apy * 100).toFixed(2)}% APY
+                </span>
+              </div>
+            )}
+            {stakingStatus.jitoBalance > 0 && (
+              <div className="mt-1.5 flex items-center justify-between">
+                <span className="text-xs text-white/60">
+                  {stakingStatus.jitoBalance.toFixed(4)} JitoSOL
+                </span>
+                <span className="text-[10px] font-medium text-emerald-400">
+                  {(stakingStatus.jitoApy * 100).toFixed(2)}% APY
+                </span>
+              </div>
+            )}
+            <p className="mt-1.5 text-[10px] text-white/30">
+              +{stakingStatus.estimatedMonthlyYieldSol.toFixed(4)} SOL / month
+            </p>
           </div>
         </div>
       )}
