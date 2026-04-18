@@ -65,6 +65,9 @@ import { cn } from "@/lib/utils";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
 import { VoiceInputButton } from "@/components/VoiceInputButton";
 import { VoiceWaveform } from "@/components/VoiceWaveform";
+import { setOrbState } from "@/lib/stores/orbStore";
+import { SecurityScanOverlay } from "@/components/SecurityScanOverlay";
+import type { TxAnalysis } from "@/app/api/analyze-transaction/route";
 
 type Role = "user" | "ai";
 type MessageComponent =
@@ -299,6 +302,9 @@ export function ChatInterface() {
   const capturedSwapOutRef = useRef<{ outUiAmount: number; toToken: string } | null>(null);
   const multiStepLastErrorRef = useRef<string | null>(null);
 
+  const [securityAnalysis, setSecurityAnalysis] = useState<TxAnalysis | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+
   const { schedules, duePayment, loading: schedulesLoading, refresh: refreshSchedules, clearDue } =
     useScheduledPayments(publicKey?.toBase58() ?? null);
 
@@ -310,6 +316,34 @@ export function ChatInterface() {
       setPendingStake({ action: "unstake", amount, provider });
     },
     []
+  );
+
+  const runSecurityScan = useCallback(
+    async (txContext: Record<string, unknown>) => {
+      if (!publicKey) return;
+      setIsScanning(true);
+      setSecurityAnalysis(null);
+      setOrbState("scanning");
+      try {
+        const res = await fetch("/api/analyze-transaction", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            txContext,
+            walletPubkey: publicKey.toBase58(),
+            solBalance: balance ?? 0,
+          }),
+        });
+        const json = (await res.json()) as { success: boolean; data?: TxAnalysis };
+        if (json.success && json.data) setSecurityAnalysis(json.data);
+      } catch {
+        // Graceful degradation — scan failure never blocks signing
+      } finally {
+        setIsScanning(false);
+        setOrbState("idle");
+      }
+    },
+    [publicKey, balance]
   );
 
   const executeRebalanceSwap = useCallback(async (swap: RebalanceSwap): Promise<boolean> => {
@@ -912,30 +946,66 @@ export function ChatInterface() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapPreviewStatus, previewStatus, multiStepIndex, pendingMultiStep]);
 
-  // Auto-approve: fire confirm handlers as soon as preflight reaches "ready"
+  // Security scan triggers — run after preflight completes, before showing the modal
+  useEffect(() => {
+    if (previewStatus !== "ready" || !pendingSend || !publicKey) return;
+    void runSecurityScan({
+      type: "send",
+      amount: pendingSend.amount,
+      token: pendingSend.token,
+      recipientPubkey: previewRecipientPubkey ?? pendingSend.recipient,
+      programId: "11111111111111111111111111111111",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewStatus]);
+
+  useEffect(() => {
+    if (swapPreviewStatus !== "ready" || !pendingSwap || !publicKey) return;
+    void runSecurityScan({
+      type: "swap",
+      fromToken: pendingSwap.fromToken,
+      toToken: pendingSwap.toToken,
+      amount: pendingSwap.amount,
+      priceImpact: swapQuoteDisplay?.priceImpactPct ?? 0,
+      routeLabels: swapQuoteDisplay?.routeLabels ?? [],
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swapPreviewStatus]);
+
+  useEffect(() => {
+    if (stakePreviewStatus !== "ready" || !pendingStake || !publicKey) return;
+    void runSecurityScan({
+      type: "stake",
+      amount: typeof pendingStake.amount === "number" ? pendingStake.amount : 0,
+      provider: pendingStake.provider,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stakePreviewStatus]);
+
+  // Auto-approve: fire confirm handlers as soon as preflight reaches "ready" (wait for scan)
   useEffect(() => {
     if (pendingMultiStep) return; // multi-step has its own auto-approve below
-    if (autoApprove && previewStatus === "ready" && pendingSend) {
+    if (autoApprove && previewStatus === "ready" && pendingSend && !isScanning) {
       handleConfirmSend();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, previewStatus, pendingSend, pendingMultiStep]);
+  }, [autoApprove, previewStatus, pendingSend, pendingMultiStep, isScanning]);
 
   useEffect(() => {
     if (pendingMultiStep) return;
-    if (autoApprove && swapPreviewStatus === "ready" && pendingSwap) {
+    if (autoApprove && swapPreviewStatus === "ready" && pendingSwap && !isScanning) {
       handleConfirmSwap();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, swapPreviewStatus, pendingSwap, pendingMultiStep]);
+  }, [autoApprove, swapPreviewStatus, pendingSwap, pendingMultiStep, isScanning]);
 
   useEffect(() => {
     if (pendingMultiStep) return;
-    if (autoApprove && stakePreviewStatus === "ready" && pendingStake) {
+    if (autoApprove && stakePreviewStatus === "ready" && pendingStake && !isScanning) {
       handleConfirmStake();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, stakePreviewStatus, pendingStake, pendingMultiStep]);
+  }, [autoApprove, stakePreviewStatus, pendingStake, pendingMultiStep, isScanning]);
 
   useEffect(() => {
     if (autoApprove && scheduleExecStatus === "ready" && pendingScheduledExec) {
@@ -1433,6 +1503,9 @@ export function ChatInterface() {
     setPendingStake(null);
     preparedTxRef.current = null;
     preparedSwapRef.current = null;
+    setSecurityAnalysis(null);
+    setIsScanning(false);
+    setOrbState("idle");
     appendMessage({
       id: crypto.randomUUID(),
       role: "ai",
@@ -2113,6 +2186,8 @@ export function ChatInterface() {
         </p>
       </div>
 
+      <SecurityScanOverlay visible={isScanning} analysis={securityAnalysis} />
+
       {pendingMultiStep ? (
         <MultiStepPreview
           intent={pendingMultiStep}
@@ -2132,6 +2207,7 @@ export function ChatInterface() {
           errorMessage={previewError}
           feeLamports={previewFeeLamports}
           recipientPubkey={previewRecipientPubkey}
+          analysis={securityAnalysis}
           onConfirm={handleConfirmSend}
           onCancel={handleCancelPreview}
         />
@@ -2141,6 +2217,7 @@ export function ChatInterface() {
           status={swapPreviewStatus}
           errorMessage={swapPreviewError}
           quote={swapQuoteDisplay}
+          analysis={securityAnalysis}
           onConfirm={handleConfirmSwap}
           onCancel={handleCancelPreview}
         />
@@ -2150,6 +2227,7 @@ export function ChatInterface() {
           status={stakePreviewStatus}
           errorMessage={stakePreviewError}
           quote={stakeQuoteDisplay}
+          analysis={securityAnalysis}
           onConfirm={handleConfirmStake}
           onCancel={handleCancelPreview}
         />
