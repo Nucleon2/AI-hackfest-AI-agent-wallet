@@ -10,7 +10,79 @@ export type IntentAction =
   | "save_contact"
   | "list_contacts"
   | "delete_contact"
-  | "multi_step";
+  | "multi_step"
+  | "set_portfolio"
+  | "view_portfolio"
+  | "pause_portfolio"
+  | "resume_portfolio"
+  | "set_drift_threshold";
+
+export interface PortfolioTarget {
+  token: string;
+  percentage: number;
+}
+
+export interface PortfolioConfig {
+  id: string;
+  wallet_pubkey: string;
+  targets: PortfolioTarget[];
+  drift_threshold: number;
+  is_active: boolean;
+  auto_execute: boolean;
+  last_rebalanced_at: number | null;
+  created_at: number;
+}
+
+export interface TokenAllocation {
+  token: string;
+  currentPct: number;
+  targetPct: number;
+  drift: number;
+  valueUsd: number;
+  balanceUi: number;
+  priceUsd: number;
+}
+
+export interface PortfolioStatus {
+  allocations: TokenAllocation[];
+  totalValueUsd: number;
+  maxDrift: number;
+  needsRebalance: boolean;
+  config: PortfolioConfig;
+  fetchedAt: number;
+}
+
+export interface RebalanceSwap {
+  fromToken: string;
+  toToken: string;
+  fromAmount: number;
+  slippageBps: number;
+  reason: string;
+}
+
+export interface SetPortfolioIntent {
+  action: "set_portfolio";
+  targets: PortfolioTarget[];
+  drift_threshold?: number;
+  auto_execute?: boolean;
+}
+
+export interface ViewPortfolioIntent {
+  action: "view_portfolio";
+}
+
+export interface PausePortfolioIntent {
+  action: "pause_portfolio";
+}
+
+export interface ResumePortfolioIntent {
+  action: "resume_portfolio";
+}
+
+export interface SetDriftThresholdIntent {
+  action: "set_drift_threshold";
+  threshold: number;
+}
 
 export interface SendIntent {
   action: "send";
@@ -124,7 +196,12 @@ export type Intent =
   | SaveContactIntent
   | ListContactsIntent
   | DeleteContactIntent
-  | MultiStepIntent;
+  | MultiStepIntent
+  | SetPortfolioIntent
+  | ViewPortfolioIntent
+  | PausePortfolioIntent
+  | ResumePortfolioIntent
+  | SetDriftThresholdIntent;
 
 export interface WalletContext {
   publicKey?: string;
@@ -187,6 +264,27 @@ export function isIntent(value: unknown): value is Intent {
         (value.steps as unknown[]).length >= 2 &&
         typeof value.description === "string"
       );
+    case "set_portfolio": {
+      if (!Array.isArray(value.targets) || (value.targets as unknown[]).length === 0) return false;
+      const targets = value.targets as unknown[];
+      const allValid = targets.every(
+        (t) =>
+          isRecord(t) &&
+          typeof t.token === "string" &&
+          typeof t.percentage === "number"
+      );
+      if (!allValid) return false;
+      const sum = (targets as { percentage: number }[]).reduce((acc, t) => acc + t.percentage, 0);
+      return Math.abs(sum - 100) <= 1.5;
+    }
+    case "view_portfolio":
+      return true;
+    case "pause_portfolio":
+      return true;
+    case "resume_portfolio":
+      return true;
+    case "set_drift_threshold":
+      return typeof value.threshold === "number" && value.threshold > 0;
     default:
       return false;
   }

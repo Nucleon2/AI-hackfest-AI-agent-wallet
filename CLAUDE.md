@@ -4,7 +4,7 @@
 
 **Name:** AI Agent Wallet (working title — rename as desired)
 **Type:** Hackathon project — MLH AI Hackfest, Solana track
-**Goal:** A natural language-powered Solana wallet. Users type plain English commands ("Send 2 SOL to Ahmad.sol", "Swap 50 USDC for SOL") and the AI parses intent, builds the transaction, previews it, and executes on confirmation.
+**Goal:** A natural language-powered Solana wallet. Users type plain English commands ("Send 2 SOL to Ahmad.sol", "Swap 50 USDC for SOL", "Keep my portfolio 60% SOL 40% USDC") and the AI parses intent, builds the transaction, previews it, and executes on confirmation. Includes an autonomous portfolio manager that monitors drift and rebalances via Jupiter swaps without user intervention.
 **Target:** Win the Solana track by combining AI decision-making with Solana's speed and near-zero fees.
 
 ---
@@ -39,27 +39,59 @@
 │   └── api/
 │       ├── parse-intent/
 │       │   └── route.ts         # Claude API call — parses user message into structured intent
-│       └── swap-quote/
-│           └── route.ts         # Jupiter API — fetch swap quote for preview
+│       ├── swap-quote/
+│       │   └── route.ts         # Jupiter API — fetch swap quote for preview
+│       ├── swap-build/
+│       │   └── route.ts         # Jupiter API — build swap transaction
+│       ├── schedules/           # Scheduled payments CRUD + due/execute
+│       ├── contacts/            # Contact address book CRUD + resolve
+│       ├── chat-sessions/       # Chat session + message persistence
+│       └── portfolio/
+│           ├── config/
+│           │   └── route.ts     # GET/POST/PATCH/DELETE portfolio target allocation
+│           ├── status/
+│           │   └── route.ts     # Fetch live prices + balances + drift analysis
+│           └── rebalance/
+│               └── route.ts     # POST: Claude decides swap instructions
 ├── components/
-│   ├── ChatInterface.tsx         # Main chat window — messages, input bar
-│   ├── MessageBubble.tsx         # Individual message renderer (user vs AI)
+│   ├── ChatInterface.tsx         # Main chat window — messages, input bar, all intent handlers
 │   ├── TransactionPreview.tsx    # Confirmation modal before signing
-│   ├── PortfolioCard.tsx         # Token balance summary card
-│   ├── ReceiptCard.tsx           # Post-transaction AI-generated receipt
-│   ├── WalletConnectButton.tsx   # Phantom/Backpack connect button
+│   ├── PortfolioCard.tsx         # SOL balance summary card
+│   ├── PortfolioManagerCard.tsx  # AI portfolio manager — allocation bars, rebalance UI
+│   ├── ReceiptCard.tsx           # Post-transaction receipt with Solscan link
+│   ├── TransactionHistoryCard.tsx# Recent transactions from RPC
+│   ├── ScheduledPaymentsCard.tsx # Scheduled/recurring payments list
+│   ├── ContactsCard.tsx          # Address book contacts list
+│   ├── MultiStepPreview.tsx      # Multi-step transaction progress UI
+│   ├── Sidebar.tsx               # Balance panel, quick actions, chat sessions, portfolio status
 │   └── three/
 │       └── WalletOrb.tsx         # React Three Fiber 3D centerpiece orb
 ├── hooks/
-│   ├── useWalletBalance.ts       # Fetches SOL + token balances from RPC
-│   └── useTransactionHistory.ts  # Fetches recent txs from Solana RPC
+│   ├── useWalletBalance.ts       # Fetches SOL balance, subscribes to account changes
+│   ├── useTransactionHistory.ts  # Fetches recent txs from Solana RPC
+│   ├── useScheduledPayments.ts   # Polls for due scheduled payments every 30s
+│   ├── useAutoApprove.ts         # Auto-approve toggle (localStorage)
+│   ├── useChatSessions.ts        # Chat session CRUD + Zustand integration
+│   └── usePortfolioManager.ts    # 30s polling loop, drift detection, auto-rebalance execution
 ├── lib/
-│   ├── intentParser.ts           # Types for parsed intents (SendIntent, SwapIntent, etc.)
-│   ├── transactionBuilder.ts     # Builds Solana transactions from structured intent
-│   ├── jupiterClient.ts          # Jupiter API wrapper (quote + swap)
-│   └── solanaClient.ts           # RPC connection setup, helpers
+│   ├── transactionBuilder.ts     # Builds Solana versioned transactions
+│   ├── jupiterClient.ts          # Jupiter lite API wrapper (quote + swap)
+│   ├── solanaClient.ts           # RPC connection setup, helpers
+│   ├── tokenRegistry.ts          # Supported tokens: SOL, USDC, USDT, BONK, JUP
+│   ├── portfolioManager.ts       # Price fetching, allocation math, Claude rebalance call
+│   ├── scheduleUtils.ts          # Compute first/next execution times
+│   ├── db.ts                     # SQLite schema (better-sqlite3, WAL mode)
+│   └── stores/
+│       └── chatSessionStore.ts   # Zustand store for active chat session
 ├── types/
-│   └── intent.ts                 # TypeScript types for all intent shapes
+│   ├── intent.ts                 # All intent types + portfolio types (PortfolioConfig, etc.)
+│   ├── schedule.ts               # ScheduledPayment interface
+│   └── contact.ts                # Contact interface
+├── db/
+│   └── schedules.db              # SQLite database (auto-created, gitignored)
+├── tests/
+│   └── portfolio-manager.spec.ts # Playwright end-to-end tests
+├── playwright.config.ts
 ├── public/
 └── CLAUDE.md
 ```
@@ -89,65 +121,33 @@ All intents are typed in `types/intent.ts`. Every intent has an `action` field a
 
 ```typescript
 type Intent =
-  | SendIntent
-  | SwapIntent
-  | BalanceIntent
-  | HistoryIntent
-  | UnknownIntent;
-
-interface SendIntent {
-  action: "send";
-  amount: number;
-  token: string;        // "SOL", "USDC", etc.
-  recipient: string;    // wallet address or .sol domain
-  memo?: string;
-}
-
-interface SwapIntent {
-  action: "swap";
-  fromToken: string;
-  toToken: string;
-  amount: number;
-  slippageBps?: number; // default 50 (0.5%)
-}
-
-interface BalanceIntent {
-  action: "balance";
-  token?: string;       // if null, return all balances
-}
-
-interface HistoryIntent {
-  action: "history";
-  limit?: number;       // default 5
-}
-
-interface UnknownIntent {
-  action: "unknown";
-  clarification: string; // Claude's message asking for clarification
-}
+  | SendIntent          // "send 0.5 SOL to Alice"
+  | SwapIntent          // "swap 10 USDC for SOL"
+  | BalanceIntent       // "what's my balance?"
+  | HistoryIntent       // "show my last 5 transactions"
+  | UnknownIntent       // clarification request
+  | ScheduleIntent      // "send 10 USDC to Bob every Friday"
+  | ViewSchedulesIntent // "show my scheduled payments"
+  | CancelScheduleIntent
+  | SaveContactIntent   // "save ABC123 as Alice"
+  | ListContactsIntent  // "show my contacts"
+  | DeleteContactIntent
+  | MultiStepIntent     // "swap 50 USDC to SOL then send it to Alice"
+  | SetPortfolioIntent  // "keep my portfolio 60% SOL 30% USDC 10% BONK"
+  | ViewPortfolioIntent // "show my portfolio"
+  | PausePortfolioIntent
+  | ResumePortfolioIntent
+  | SetDriftThresholdIntent; // "set drift threshold to 3%"
 ```
 
 ### Claude System Prompt (for `/api/parse-intent`)
 
-Use this exact system prompt when calling the Anthropic API:
-
-```
-You are an intent parser for a Solana crypto wallet. 
-Your ONLY job is to convert the user's natural language message into a structured JSON intent object.
-
-Rules:
-- Always respond with valid JSON only. No markdown, no explanation, no preamble.
-- Supported actions: "send", "swap", "balance", "history", "unknown"
-- For "send": extract amount (number), token (string, uppercase), recipient (string). If recipient looks like a name not an address, still include it as-is — the frontend will resolve it.
-- For "swap": extract fromToken, toToken, amount. Default slippageBps to 50 if not specified.
-- For "balance": if the user asks about a specific token, include it. Otherwise omit token field.
-- For "history": extract limit if mentioned, default to 5.
-- If the intent is unclear or unsupported, return action "unknown" with a clarification message.
-- Token amounts: always return as a number. "five" = 5, "half a SOL" = 0.5.
-- Token names: always uppercase. "sol" = "SOL", "usdc" = "USDC".
-
-Wallet context will be provided in the user message. Use it to resolve relative amounts like "half my SOL".
-```
+The system prompt in `app/api/parse-intent/route.ts` handles all intent types. Key rules:
+- Always respond with valid JSON only — no markdown, no preamble
+- Supported actions: `send`, `swap`, `balance`, `history`, `unknown`, `schedule`, `view_schedules`, `cancel_schedule`, `save_contact`, `list_contacts`, `delete_contact`, `multi_step`, `set_portfolio`, `view_portfolio`, `pause_portfolio`, `resume_portfolio`, `set_drift_threshold`
+- Token names always uppercase; amounts always numbers
+- `set_portfolio` — percentages MUST sum to 100, else return `unknown` with clarification
+- `multi_step` — chains up to 4 sequential actions; `send.amount = null` means use previous swap output
 
 ---
 
@@ -169,10 +169,14 @@ Use devnet during development. Switch `NEXT_PUBLIC_SOLANA_RPC_URL` to a mainnet 
 
 ### Jupiter Swap Flow
 
-1. Call `https://quote-api.jup.ag/v6/quote` with inputMint, outputMint, amount in lamports
+Base URL: `https://lite-api.jup.ag/swap/v1`
+
+1. Call `/quote` with inputMint, outputMint, amount in base units, slippageBps
 2. Display the quote in the TransactionPreview modal (rate, price impact, fees)
-3. On confirmation, call `https://quote-api.jup.ag/v6/swap` with the quote response + user public key
+3. On confirmation, call `/swap` with the quote response + user public key
 4. Get back a `swapTransaction` (base64 encoded), deserialize, sign with wallet adapter, broadcast
+
+**Note:** The Jupiter Price API (`/price/v2`) is not available on the lite API. Token prices are derived by requesting a 1-unit swap quote to USDC instead (see `lib/portfolioManager.ts → fetchTokenPrices`).
 
 ### SOL Domains (.sol)
 
@@ -229,24 +233,96 @@ Never expose `ANTHROPIC_API_KEY` to the client. All Claude calls go through `/ap
 ## MVP Checklist
 
 - [ ] Wallet connect (Phantom + Backpack via wallet adapter)
-- [ ] Balance fetch and display in chat
-- [ ] Natural language SOL send (parse → preview → sign → broadcast → receipt)
+- [x] Balance fetch and display in chat
+- [x] Natural language SOL send (parse → preview → sign → broadcast → receipt)
 - [ ] Natural language USDC send (SPL token transfer)
-- [ ] Natural language swap via Jupiter (quote → preview → execute)
-- [ ] AI-generated receipt after every transaction (links to Solscan)
-- [ ] Unknown intent handling (Claude asks for clarification)
+- [x] Natural language swap via Jupiter (quote → preview → execute)
+- [x] AI-generated receipt after every transaction (links to Solscan)
+- [x] Unknown intent handling (Claude asks for clarification)
 - [ ] 3D orb reacts to transaction states
 - [ ] Devnet working end-to-end with real transactions
 
 ---
 
-## Post-MVP Features (priority order)
+## Implemented Features
 
-1. **Contacts** — save wallet addresses under names, stored in localStorage
-2. **Voice input** — Web Speech API, transcribes into chat input
-3. **Transaction history** — "Show my last 5 txs" fetches from RPC, Claude narrates
-4. **Scheduled sends** — "Send 10 USDC every Friday" — stored in a simple backend scheduler
-5. **Multi-step commands** — "Swap 50 USDC to SOL then send it to XYZ" — Claude returns an array of intents, executed sequentially
+1. **Contacts** — save wallet addresses under names, persisted in SQLite
+2. **Transaction history** — "Show my last 5 txs" fetches from RPC
+3. **Scheduled sends** — "Send 10 USDC every Friday" — stored in SQLite, polled every 30s
+4. **Multi-step commands** — "Swap 50 USDC to SOL then send it to XYZ" — sequential execution with output chaining
+5. **Chat session persistence** — conversations saved per wallet in SQLite, visible in sidebar
+6. **Auto-approve mode** — toggle to execute transactions without manual confirmation
+7. **AI Portfolio Manager** — autonomous rebalancing (see below)
+
+---
+
+## AI Portfolio Manager
+
+### How It Works
+
+```
+User: "keep my portfolio 60% SOL, 30% USDC, 10% BONK"
+  → SetPortfolioIntent parsed by Claude
+  → Config saved to portfolio_configs table in SQLite
+  → usePortfolioManager hook polls /api/portfolio/status every 30 seconds
+  → Status route fetches token prices (via Jupiter swap quotes) + balances from RPC
+  → Calculates current allocation % and drift from targets
+  → If maxDrift ≥ driftThreshold: POST /api/portfolio/rebalance
+  → Rebalance route calls Claude (haiku) with current vs target allocations
+  → Claude returns list of swap instructions (sell overweight → buy underweight)
+  → If auto_execute=true: swaps execute silently via Jupiter, receipts appear in chat
+  → If auto_execute=false: rebalance preview shown in chat for user confirmation
+```
+
+### Natural Language Commands
+
+| Command | Intent |
+|---|---|
+| `"keep my portfolio 60% SOL 40% USDC"` | `set_portfolio` |
+| `"show my portfolio"` | `view_portfolio` |
+| `"pause rebalancing"` | `pause_portfolio` |
+| `"resume rebalancing"` | `resume_portfolio` |
+| `"set drift threshold to 3%"` | `set_drift_threshold` |
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `lib/portfolioManager.ts` | Price fetching, allocation math, rebalance swap generation, Claude call |
+| `app/api/portfolio/config/route.ts` | GET/POST/PATCH/DELETE portfolio config |
+| `app/api/portfolio/status/route.ts` | Live prices + drift analysis |
+| `app/api/portfolio/rebalance/route.ts` | Claude generates swap instructions |
+| `hooks/usePortfolioManager.ts` | 30s polling loop, auto-execute orchestration |
+| `components/PortfolioManagerCard.tsx` | Animated allocation bars, rebalance preview |
+
+### Database Schema (portfolio_configs table)
+
+```sql
+CREATE TABLE portfolio_configs (
+  id                 TEXT PRIMARY KEY,
+  wallet_pubkey      TEXT NOT NULL UNIQUE,
+  targets            TEXT NOT NULL,       -- JSON: [{token, percentage}]
+  drift_threshold    REAL NOT NULL DEFAULT 5.0,
+  is_active          INTEGER NOT NULL DEFAULT 1,
+  auto_execute       INTEGER NOT NULL DEFAULT 0,
+  last_rebalanced_at INTEGER,
+  created_at         INTEGER NOT NULL
+);
+```
+
+### Constraints
+
+- Autonomous execution requires the app tab to be open (browser-based polling, same as scheduled payments)
+- Minimum swap size: $1.00 USD (prevents micro-rebalances that cost more in fees than they save)
+- Swaps execute sequentially, not in parallel (each swap changes portfolio state)
+- Target percentages must sum to 100 (±1.5% tolerance for floating-point)
+
+---
+
+## Post-MVP Features (remaining)
+
+1. **Voice input** — Web Speech API, transcribes into chat input
+2. **True background rebalancing** — server-side cron with pre-signed transactions (requires custodial key)
 
 ---
 
@@ -256,8 +332,11 @@ Never expose `ANTHROPIC_API_KEY` to the client. All Claude calls go through `/ap
 2. Type: `"What's in my wallet?"` — shows balance card
 3. Type: `"Swap 10 USDC for SOL"` — shows swap quote preview, confirm, show receipt
 4. Type: `"Send 0.1 SOL to <address>"` — preview, confirm, receipt with Solscan link
-5. Show the orb reacting during the transaction processing state
-6. One-liner pitch: "Most wallets make you learn crypto. This one already speaks human."
+5. Type: `"keep my portfolio 60% SOL, 30% USDC, 10% BONK"` — shows portfolio manager card with allocation bars
+6. Type: `"show my portfolio"` — shows live prices, current vs target drift indicators
+7. Click "Rebalance Now" — Claude analyzes drift and recommends exact swap amounts
+8. Show the orb reacting during the transaction processing state
+9. One-liner pitch: "Most wallets make you learn crypto. This one already speaks human — and manages itself."
 
 ---
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, type VersionedTransaction } from "@solana/web3.js";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
@@ -12,6 +12,7 @@ import { ScheduledPaymentsCard } from "@/components/ScheduledPaymentsCard";
 import { ContactsCard } from "@/components/ContactsCard";
 import { AutoApproveToggle } from "@/components/AutoApproveToggle";
 import { useAutoApprove } from "@/hooks/useAutoApprove";
+import { useChatSessions } from "@/hooks/useChatSessions";
 import {
   TransactionPreview,
   type PreviewStatus,
@@ -19,6 +20,8 @@ import {
 } from "@/components/TransactionPreview";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
 import { useScheduledPayments } from "@/hooks/useScheduledPayments";
+import { useChatSessionStore } from "@/lib/stores/chatSessionStore";
+import type { ChatMessageRow } from "@/lib/db";
 import {
   buildSolTransferTx,
   deserializeSwapTx,
@@ -27,13 +30,15 @@ import {
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
 import type { JupiterQuote } from "@/lib/jupiterClient";
-import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent, MultiStepIntent } from "@/types/intent";
+import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent, MultiStepIntent, SetPortfolioIntent, RebalanceSwap } from "@/types/intent";
+import { PortfolioManagerCard } from "@/components/PortfolioManagerCard";
+import { usePortfolioManager } from "@/hooks/usePortfolioManager";
 import { MultiStepPreview, type StepRunStatus } from "@/components/MultiStepPreview";
 import type { ScheduledPayment } from "@/types/schedule";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "ai";
-type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts";
+type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts" | "portfolio_manager";
 
 type ReceiptPayload =
   | {
@@ -102,6 +107,61 @@ interface PreparedSwap {
   outUiAmount: number;
 }
 
+const HISTORY_WINDOW = 10;
+
+function componentSummary(component: MessageComponent, msg: Message): string {
+  switch (component) {
+    case "portfolio":
+      return "[AI showed wallet balance and portfolio]";
+    case "history":
+      return `[AI showed last ${msg.historyLimit ?? 5} transactions]`;
+    case "receipt":
+      if (msg.receipt?.kind === "send")
+        return `[Sent ${msg.receipt.amount} ${msg.receipt.token} to ${msg.receipt.recipient}]`;
+      if (msg.receipt?.kind === "swap")
+        return `[Swapped ${msg.receipt.fromAmount} ${msg.receipt.fromToken} → ${msg.receipt.toAmount} ${msg.receipt.toToken}]`;
+      return "[Transaction completed]";
+    case "schedules":
+      return "[AI showed scheduled payments]";
+    case "contacts":
+      return "[AI showed address book contacts]";
+    case "portfolio_manager":
+      return "[AI showed portfolio manager with allocation targets]";
+  }
+}
+
+function buildConversationHistory(msgs: Message[]): Array<{ role: "user" | "assistant"; content: string }> {
+  return msgs
+    .filter((m) => m.id !== "welcome")
+    .slice(-HISTORY_WINDOW)
+    .map((m) => ({
+      role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+      content: m.component ? componentSummary(m.component, m) : (m.text ?? ""),
+    }))
+    .filter((m) => m.content.trim().length > 0);
+}
+
+function rowsToMessages(rows: ChatMessageRow[]): Message[] {
+  return rows.map((row) => {
+    const msg: Message = {
+      id: row.id,
+      role: row.role,
+      ts: row.ts,
+    };
+    if (row.text) msg.text = row.text;
+    if (row.component) msg.component = row.component as MessageComponent;
+    if (row.receipt_json) {
+      try {
+        msg.receipt = JSON.parse(row.receipt_json) as ReceiptPayload;
+      } catch {
+        // ignore malformed
+      }
+    }
+    if (row.history_limit !== null) msg.historyLimit = row.history_limit;
+    return msg;
+  });
+}
+
 export function ChatInterface() {
   const { connection } = useConnection();
   const { connected, publicKey, sendTransaction } = useWallet();
@@ -155,7 +215,140 @@ export function ChatInterface() {
   const { schedules, duePayment, loading: schedulesLoading, refresh: refreshSchedules, clearDue } =
     useScheduledPayments(publicKey?.toBase58() ?? null);
 
+  // --- Portfolio manager ---
+  const [portfolioMsgIds, setPortfolioMsgIds] = useState<string[]>([]);
+
+  const executeRebalanceSwap = useCallback(async (swap: RebalanceSwap): Promise<boolean> => {
+    if (!publicKey) return false;
+    try {
+      const quoteRes = await fetch("/api/swap-quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fromToken: swap.fromToken,
+          toToken: swap.toToken,
+          amount: swap.fromAmount,
+          slippageBps: swap.slippageBps,
+        }),
+      });
+      const quoteJson = (await quoteRes.json()) as
+        | { success: true; data: { quote: import("@/lib/jupiterClient").JupiterQuote; display: import("@/components/TransactionPreview").SwapQuoteDisplay } }
+        | { success: false; error?: string };
+      if (!quoteJson.success) return false;
+
+      const buildRes = await fetch("/api/swap-build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quote: quoteJson.data.quote, userPublicKey: publicKey.toBase58() }),
+      });
+      const buildJson = (await buildRes.json()) as
+        | { success: true; data: { swapTransaction: string; lastValidBlockHeight: number } }
+        | { success: false; error?: string };
+      if (!buildJson.success) return false;
+
+      const tx = deserializeSwapTx(buildJson.data.swapTransaction);
+      const sig = await sendTransaction(tx, connection);
+      const blockhash = tx.message.recentBlockhash;
+      const result = await connection.confirmTransaction(
+        { signature: sig, blockhash, lastValidBlockHeight: buildJson.data.lastValidBlockHeight },
+        "confirmed"
+      );
+      if (result.value.err) return false;
+
+      appendMessage({
+        id: crypto.randomUUID(),
+        role: "ai",
+        component: "receipt",
+        receipt: {
+          kind: "swap",
+          signature: sig,
+          fromAmount: swap.fromAmount,
+          fromToken: swap.fromToken,
+          toAmount: quoteJson.data.display.outUiAmount,
+          toToken: swap.toToken,
+          network: SOLANA_NETWORK,
+        },
+        ts: Date.now(),
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicKey, sendTransaction, connection]);
+
+  const {
+    config: portfolioConfig,
+    status: portfolioStatus,
+    isRebalancing,
+    pendingSwaps: portfolioPendingSwaps,
+    rebalanceReasoning,
+    error: portfolioError,
+    triggerRebalance,
+    dismissPendingSwaps,
+    updateConfig: updatePortfolioConfig,
+  } = usePortfolioManager(publicKey?.toBase58() ?? null, executeRebalanceSwap);
+
+  // When drift is detected and auto-execute is off, show the portfolio card in chat
+  const prevPendingSwapsRef = useRef<RebalanceSwap[] | null>(null);
+  useEffect(() => {
+    if (portfolioPendingSwaps && portfolioPendingSwaps !== prevPendingSwapsRef.current) {
+      prevPendingSwapsRef.current = portfolioPendingSwaps;
+      appendMessage({
+        id: crypto.randomUUID(),
+        role: "ai",
+        text: "Portfolio drift detected — Claude recommends rebalancing:",
+        ts: Date.now(),
+      });
+      const cardId = crypto.randomUUID();
+      setPortfolioMsgIds((prev) => [...prev, cardId]);
+      appendMessage({ id: cardId, role: "ai", component: "portfolio_manager", ts: Date.now() });
+    }
+    if (!portfolioPendingSwaps) prevPendingSwapsRef.current = null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolioPendingSwaps]);
+
   const { autoApprove, toggle: toggleAutoApprove } = useAutoApprove();
+
+  // --- Chat session persistence ---
+  const { activeSessionId, bumpSession, updateSessionTitle } = useChatSessionStore();
+  const { loadSessions, createSession } = useChatSessions(publicKey?.toBase58() ?? null);
+
+  // Load messages when active session changes
+  useEffect(() => {
+    if (!activeSessionId) {
+      setMessages([WELCOME]);
+      return;
+    }
+    fetch(`/api/chat-sessions/${activeSessionId}/messages`)
+      .then((r) => r.json())
+      .then((json: { success: boolean; data?: ChatMessageRow[] }) => {
+        if (json.success && json.data && json.data.length > 0) {
+          setMessages(rowsToMessages(json.data));
+        } else {
+          setMessages([WELCOME]);
+        }
+      })
+      .catch(() => setMessages([WELCOME]));
+  }, [activeSessionId]);
+
+  // Init session on wallet connect
+  useEffect(() => {
+    if (!publicKey) {
+      setMessages([WELCOME]);
+      return;
+    }
+    async function initSession() {
+      await loadSessions();
+      const { sessions, setActiveSessionId } = useChatSessionStore.getState();
+      if (sessions.length > 0) {
+        setActiveSessionId(sessions[0].id);
+      } else {
+        await createSession();
+      }
+    }
+    initSession();
+  }, [publicKey?.toBase58()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -413,8 +606,41 @@ export function ChatInterface() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoApprove, multiStepStatuses, multiStepIndex, pendingMultiStep]);
 
+  function persistMessage(sessionId: string, msg: Message) {
+    if (msg.id === "welcome") return;
+
+    // Instantly update title in the store so the sidebar reflects it without a reload
+    if (msg.role === "user" && msg.text) {
+      const currentSession = useChatSessionStore.getState().sessions.find((s) => s.id === sessionId);
+      if (currentSession?.title === "New Chat") {
+        const autoTitle = msg.text.length > 40 ? msg.text.slice(0, 40) + "…" : msg.text;
+        updateSessionTitle(sessionId, autoTitle);
+      }
+    }
+
+    const row: Omit<ChatMessageRow, never> = {
+      id: msg.id,
+      session_id: sessionId,
+      role: msg.role,
+      text: msg.text ?? null,
+      component: msg.component ?? null,
+      receipt_json: msg.receipt ? JSON.stringify(msg.receipt) : null,
+      history_limit: msg.historyLimit ?? null,
+      ts: msg.ts,
+    };
+    fetch(`/api/chat-sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: row }),
+    })
+      .then(() => bumpSession(sessionId, Date.now()))
+      .catch(() => {});
+  }
+
   function appendMessage(msg: Message) {
     setMessages((prev) => [...prev, msg]);
+    const sid = useChatSessionStore.getState().activeSessionId;
+    if (sid) persistMessage(sid, msg);
   }
 
   async function resolveRecipient(
@@ -455,6 +681,8 @@ export function ChatInterface() {
       ts: Date.now(),
     };
     setMessages((prev) => [...prev, userMsg]);
+    const sid = useChatSessionStore.getState().activeSessionId;
+    if (sid) persistMessage(sid, userMsg);
     setInput("");
     setBusy(true);
 
@@ -466,7 +694,11 @@ export function ChatInterface() {
       const res = await fetch("/api/parse-intent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, walletContext }),
+        body: JSON.stringify({
+          message: trimmed,
+          walletContext,
+          conversationHistory: buildConversationHistory(messages),
+        }),
       });
       const data = (await res.json()) as
         | { success: true; data: Intent }
@@ -592,6 +824,60 @@ export function ChatInterface() {
           component: "schedules",
           ts: Date.now(),
         });
+      } else if (data.data.action === "set_portfolio") {
+        const intent = data.data as SetPortfolioIntent;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet to set up portfolio management.", ts: Date.now() });
+        } else {
+          const res2 = await fetch("/api/portfolio/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              walletPubkey: publicKey.toBase58(),
+              targets: intent.targets,
+              drift_threshold: intent.drift_threshold ?? 5,
+              auto_execute: intent.auto_execute ?? false,
+            }),
+          });
+          const json2 = (await res2.json()) as { success: boolean; error?: string };
+          if (json2.success) {
+            const targetStr = intent.targets.map((t) => `${t.percentage}% ${t.token}`).join(", ");
+            appendMessage({
+              id: crypto.randomUUID(),
+              role: "ai",
+              text: `Portfolio target set: ${targetStr}. I'll monitor drift every 30 seconds and alert you when rebalancing is needed.`,
+              ts: Date.now(),
+            });
+            appendMessage({ id: crypto.randomUUID(), role: "ai", component: "portfolio_manager", ts: Date.now() });
+          } else {
+            appendMessage({ id: crypto.randomUUID(), role: "ai", text: json2.error ?? "Failed to save portfolio config.", ts: Date.now() });
+          }
+        }
+      } else if (data.data.action === "view_portfolio") {
+        appendMessage({ id: crypto.randomUUID(), role: "ai", component: "portfolio_manager", ts: Date.now() });
+      } else if (data.data.action === "pause_portfolio") {
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet first.", ts: Date.now() });
+        } else {
+          await updatePortfolioConfig({ is_active: false });
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Portfolio rebalancing paused. Type \"resume rebalancing\" to re-enable it.", ts: Date.now() });
+        }
+      } else if (data.data.action === "resume_portfolio") {
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet first.", ts: Date.now() });
+        } else {
+          await updatePortfolioConfig({ is_active: true });
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Portfolio rebalancing resumed! I'll monitor your allocations.", ts: Date.now() });
+          appendMessage({ id: crypto.randomUUID(), role: "ai", component: "portfolio_manager", ts: Date.now() });
+        }
+      } else if (data.data.action === "set_drift_threshold") {
+        const threshold = (data.data as { action: "set_drift_threshold"; threshold: number }).threshold;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet first.", ts: Date.now() });
+        } else {
+          await updatePortfolioConfig({ drift_threshold: threshold });
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: `Drift threshold updated to ${threshold}%. I'll rebalance when any allocation drifts more than ${threshold}%.`, ts: Date.now() });
+        }
       } else if (data.data.action === "multi_step") {
         const msIntent = data.data as MultiStepIntent;
         appendMessage({
@@ -1095,6 +1381,29 @@ export function ChatInterface() {
               schedulesLoading={schedulesLoading}
               onCancelSchedule={handleCancelSchedule}
               walletPubkey={publicKey?.toBase58() ?? null}
+              portfolioConfig={portfolioConfig}
+              portfolioStatus={portfolioStatus}
+              isRebalancing={isRebalancing}
+              portfolioPendingSwaps={portfolioMsgIds.includes(msg.id) ? portfolioPendingSwaps : null}
+              rebalanceReasoning={rebalanceReasoning}
+              portfolioError={portfolioError}
+              onTriggerRebalance={triggerRebalance}
+              onConfirmRebalanceSwaps={async () => {
+                if (!portfolioPendingSwaps) return;
+                for (const swap of portfolioPendingSwaps) {
+                  const ok = await executeRebalanceSwap(swap);
+                  if (!ok) break;
+                }
+                await fetch("/api/portfolio/config", {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ walletPubkey: publicKey?.toBase58(), last_rebalanced_at: Date.now() }),
+                });
+                dismissPendingSwaps();
+              }}
+              onDismissRebalanceSwaps={dismissPendingSwaps}
+              onToggleAutoExecute={(val) => updatePortfolioConfig({ auto_execute: val })}
+              onToggleActive={(val) => updatePortfolioConfig({ is_active: val })}
             />
           ))}
           {busy && <TypingIndicator />}
@@ -1220,12 +1529,34 @@ function MessageBubble({
   schedulesLoading,
   onCancelSchedule,
   walletPubkey,
+  portfolioConfig,
+  portfolioStatus,
+  isRebalancing,
+  portfolioPendingSwaps,
+  rebalanceReasoning,
+  portfolioError,
+  onTriggerRebalance,
+  onConfirmRebalanceSwaps,
+  onDismissRebalanceSwaps,
+  onToggleAutoExecute,
+  onToggleActive,
 }: {
   message: Message;
   scheduledPayments: ScheduledPayment[];
   schedulesLoading: boolean;
   onCancelSchedule: (id: string) => void;
   walletPubkey: string | null;
+  portfolioConfig: import("@/types/intent").PortfolioConfig | null;
+  portfolioStatus: import("@/types/intent").PortfolioStatus | null;
+  isRebalancing: boolean;
+  portfolioPendingSwaps: RebalanceSwap[] | null;
+  rebalanceReasoning: string | null;
+  portfolioError: string | null;
+  onTriggerRebalance: () => void;
+  onConfirmRebalanceSwaps: () => void;
+  onDismissRebalanceSwaps: () => void;
+  onToggleAutoExecute: (val: boolean) => void;
+  onToggleActive: (val: boolean) => void;
 }) {
   const isUser = message.role === "user";
   return (
@@ -1273,6 +1604,22 @@ function MessageBubble({
       ) : message.component === "contacts" ? (
         <div className="max-w-[90%] flex-1">
           <ContactsCard walletPubkey={walletPubkey} />
+        </div>
+      ) : message.component === "portfolio_manager" ? (
+        <div className="max-w-[90%] flex-1">
+          <PortfolioManagerCard
+            config={portfolioConfig}
+            status={portfolioStatus}
+            isRebalancing={isRebalancing}
+            pendingSwaps={portfolioPendingSwaps}
+            rebalanceReasoning={rebalanceReasoning}
+            error={portfolioError}
+            onTriggerRebalance={onTriggerRebalance}
+            onConfirmSwaps={onConfirmRebalanceSwaps}
+            onDismissSwaps={onDismissRebalanceSwaps}
+            onToggleAutoExecute={onToggleAutoExecute}
+            onToggleActive={onToggleActive}
+          />
         </div>
       ) : (
         <div
@@ -1364,5 +1711,12 @@ function intentToMessage(intent: Intent): Message {
       return { ...base, text: "Processing contact request…" };
     case "multi_step":
       return { ...base, text: `Starting multi-step: ${intent.description}` };
+    case "set_portfolio":
+    case "view_portfolio":
+    case "pause_portfolio":
+    case "resume_portfolio":
+      return { ...base, component: "portfolio_manager" as const };
+    case "set_drift_threshold":
+      return { ...base, text: `Drift threshold updated to ${intent.threshold}%.` };
   }
 }

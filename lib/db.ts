@@ -6,6 +6,25 @@ const DB_PATH = path.join(process.cwd(), "db", "schedules.db");
 
 let _db: Database.Database | null = null;
 
+export interface ChatSessionRow {
+  id: string;
+  wallet_pubkey: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ChatMessageRow {
+  id: string;
+  session_id: string;
+  role: "user" | "ai";
+  text: string | null;
+  component: string | null;
+  receipt_json: string | null;
+  history_limit: number | null;
+  ts: number;
+}
+
 export function getDb(): Database.Database {
   if (_db) return _db;
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -41,6 +60,53 @@ export function getDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_contacts_wallet
       ON contacts (wallet_pubkey, name);
+
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id            TEXT PRIMARY KEY,
+      wallet_pubkey TEXT NOT NULL,
+      title         TEXT NOT NULL DEFAULT 'New Chat',
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_wallet
+      ON chat_sessions (wallet_pubkey, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id            TEXT PRIMARY KEY,
+      session_id    TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      role          TEXT NOT NULL CHECK(role IN ('user','ai')),
+      text          TEXT,
+      component     TEXT,
+      receipt_json  TEXT,
+      history_limit INTEGER,
+      ts            INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_session
+      ON chat_messages (session_id, ts ASC);
+
+    CREATE TABLE IF NOT EXISTS portfolio_configs (
+      id                 TEXT PRIMARY KEY,
+      wallet_pubkey      TEXT NOT NULL UNIQUE,
+      targets            TEXT NOT NULL,
+      drift_threshold    REAL NOT NULL DEFAULT 5.0,
+      is_active          INTEGER NOT NULL DEFAULT 1,
+      auto_execute       INTEGER NOT NULL DEFAULT 0,
+      last_rebalanced_at INTEGER,
+      created_at         INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_portfolio_wallet
+      ON portfolio_configs (wallet_pubkey);
   `);
   return _db;
+}
+
+export interface PortfolioConfigRow {
+  id: string;
+  wallet_pubkey: string;
+  targets: string;
+  drift_threshold: number;
+  is_active: number;
+  auto_execute: number;
+  last_rebalanced_at: number | null;
+  created_at: number;
 }

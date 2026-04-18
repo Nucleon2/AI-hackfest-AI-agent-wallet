@@ -11,7 +11,7 @@ Your ONLY job is to convert the user's natural language message into a structure
 
 Rules:
 - Always respond with valid JSON only. No markdown, no explanation, no preamble.
-- Supported actions: "send", "swap", "balance", "history", "unknown", "schedule", "view_schedules", "cancel_schedule", "save_contact", "list_contacts", "delete_contact"
+- Supported actions: "send", "swap", "balance", "history", "unknown", "schedule", "view_schedules", "cancel_schedule", "save_contact", "list_contacts", "delete_contact", "set_portfolio", "view_portfolio", "pause_portfolio", "resume_portfolio", "set_drift_threshold"
 - For "send": extract amount (number), token (string, uppercase), recipient (string). If recipient looks like a contact name (not a valid Solana base58 address), still include it as-is — the frontend will resolve it against the address book.
 - For "swap": extract fromToken, toToken, amount. Default slippageBps to 50 if not specified.
 - For "balance": if the user asks about a specific token, include it. Otherwise omit token field.
@@ -61,6 +61,34 @@ For "delete_contact": user wants to remove a saved contact.
   Extract: name (the contact name to remove).
   -> { "action": "delete_contact", "name": "Alice" }
 
+For "set_portfolio": the user wants to set target portfolio allocations for auto-rebalancing.
+  Triggers: "keep my portfolio X% SOL Y% USDC", "set portfolio to X% SOL", "allocate X% SOL Y% USDC Z% BONK", "maintain portfolio balance X% SOL", "rebalance my portfolio X% SOL".
+  Extract: targets (array of {token, percentage}), optional drift_threshold (number, default 5), optional auto_execute (boolean, default false).
+  CRITICAL: percentages MUST sum to 100. If they don't, return action "unknown" with clarification asking the user to ensure they sum to 100.
+  All token names uppercase.
+  Examples:
+    "keep my portfolio 60% SOL 30% USDC 10% BONK"
+      -> { "action": "set_portfolio", "targets": [{"token": "SOL", "percentage": 60}, {"token": "USDC", "percentage": 30}, {"token": "BONK", "percentage": 10}] }
+    "60% SOL 40% USDC with 3% drift threshold"
+      -> { "action": "set_portfolio", "targets": [{"token": "SOL", "percentage": 60}, {"token": "USDC", "percentage": 40}], "drift_threshold": 3 }
+
+For "view_portfolio": user wants to see their current portfolio vs target allocations.
+  Triggers: "show my portfolio", "portfolio status", "how is my portfolio doing", "check portfolio balance", "portfolio allocation", "show portfolio manager", "portfolio rebalance status".
+  -> { "action": "view_portfolio" }
+
+For "pause_portfolio": user wants to pause automatic rebalancing.
+  Triggers: "pause rebalancing", "stop portfolio manager", "disable auto rebalance", "pause portfolio", "stop rebalancing".
+  -> { "action": "pause_portfolio" }
+
+For "resume_portfolio": user wants to resume automatic rebalancing.
+  Triggers: "resume rebalancing", "start portfolio manager", "enable auto rebalance", "resume portfolio", "turn on rebalancing".
+  -> { "action": "resume_portfolio" }
+
+For "set_drift_threshold": user wants to change how sensitive the rebalancing trigger is.
+  Triggers: "set drift threshold to X%", "rebalance when drift exceeds X%", "change rebalance sensitivity to X%", "trigger rebalance at X%".
+  Extract: threshold (number, percentage value, e.g. 3 for 3%).
+  -> { "action": "set_drift_threshold", "threshold": 3 }
+
 For "multi_step": the user has chained 2+ actions with "then", "and then", "after that", "followed by", or similar connective language. Each step executes sequentially and the output of one may feed into the next.
 
 Step types inside multi_step:
@@ -99,6 +127,38 @@ Wallet context will be provided in the user message. Use it to resolve relative 
 interface ParseBody {
   message?: unknown;
   walletContext?: unknown;
+  conversationHistory?: unknown;
+}
+
+type AnthropicMessage = { role: "user" | "assistant"; content: string };
+
+function toConversationHistory(value: unknown): AnthropicMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is AnthropicMessage =>
+      typeof item === "object" &&
+      item !== null &&
+      (item.role === "user" || item.role === "assistant") &&
+      typeof item.content === "string" &&
+      item.content.trim().length > 0
+  );
+}
+
+function buildClaudeMessages(
+  history: AnthropicMessage[],
+  currentUserContent: string
+): AnthropicMessage[] {
+  // Ensure messages strictly alternate user/assistant starting with user
+  const result: AnthropicMessage[] = [];
+  let expect: "user" | "assistant" = "user";
+  for (const msg of history) {
+    if (msg.role === expect) {
+      result.push(msg);
+      expect = expect === "user" ? "assistant" : "user";
+    }
+  }
+  result.push({ role: "user", content: currentUserContent });
+  return result;
 }
 
 function toWalletContext(value: unknown): WalletContext | undefined {
@@ -171,6 +231,7 @@ export async function POST(req: NextRequest) {
   }
 
   const walletContext = toWalletContext(body.walletContext);
+  const conversationHistory = toConversationHistory(body.conversationHistory);
   const client = new Anthropic({ apiKey });
 
   let response: Anthropic.Message;
@@ -179,9 +240,10 @@ export async function POST(req: NextRequest) {
       model: MODEL,
       max_tokens: 768,
       system: SYSTEM_PROMPT,
-      messages: [
-        { role: "user", content: buildUserMessage(message, walletContext) },
-      ],
+      messages: buildClaudeMessages(
+        conversationHistory,
+        buildUserMessage(message, walletContext)
+      ),
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : "Unknown error";
