@@ -17,6 +17,7 @@
 | Language | TypeScript (strict mode) |
 | Styling | Tailwind CSS |
 | Animations (UI) | Framer Motion (`motion/react` v12) |
+| 3D / WebGL | React Three Fiber + Drei (components exist, not mounted in page) |
 | Wallet adapter | `@solana/wallet-adapter-react` |
 | Solana SDK | `@solana/web3.js` |
 | Token swaps | Jupiter Aggregator API v6 |
@@ -65,7 +66,10 @@
 │   ├── ScheduledPaymentsCard.tsx # Scheduled/recurring payments list
 │   ├── ContactsCard.tsx          # Address book contacts list
 │   ├── MultiStepPreview.tsx      # Multi-step transaction progress UI
-│   └── Sidebar.tsx               # Balance panel, quick actions, chat sessions, portfolio status
+│   ├── Sidebar.tsx               # Balance panel, quick actions, chat sessions, portfolio status
+│   └── three/
+│       ├── Scene.tsx             # React Three Fiber canvas wrapper (exists, not mounted in page)
+│       └── WalletOrb.tsx         # 3D orb with idle/processing/confirmed/error/scanning states
 ├── hooks/
 │   ├── useWalletBalance.ts       # Fetches SOL balance, subscribes to account changes
 │   ├── useTransactionHistory.ts  # Fetches recent txs from Solana RPC
@@ -255,9 +259,12 @@ CREATE TABLE threat_log (
 
 ### Constraints
 
-- Scan failure never blocks signing — if Claude is unavailable, safe baseline is returned silently
+- Scan failure never blocks signing — if Claude is unavailable, `analyzed: false` baseline is returned
 - Auto-approve waits for the scan to complete (`!isScanning` guard on auto-approve effects)
-- No API key = safe baseline returned immediately, no overlay shown
+- Manual confirm is also blocked while scanning — button shows "Scanning…" and is disabled
+- If no API key, the endpoint returns the baseline immediately; the scan overlay appears briefly then dismisses
+- `analyzed: false` on the result means "not scanned" — UI shows "AI Guard unavailable" instead of "Verified"
+- Stale scan responses are ignored via `AbortController` — cancelling a preview aborts the in-flight fetch
 - Scheduled payment executions are not scanned (non-intrusive background flow)
 
 ---
@@ -392,7 +399,7 @@ CREATE TABLE portfolio_configs (
 - Co-locate types with the file that owns them unless shared across 3+ files
 - API routes return `{ success: true, data: ... }` or `{ success: false, error: string }`
 - Never `any` — use `unknown` and narrow properly
-- Tailwind only for styling — no inline style objects
+- Tailwind only for styling — inline style objects are allowed only when the value is dynamic or Tailwind cannot express it (e.g. CSS gradients with runtime color stops, `box-shadow` glow values)
 - Animation library is `motion/react` (Framer Motion v12) — not GSAP
 - All Solana amounts stored and computed in lamports internally, only converted to SOL/UI units for display
 

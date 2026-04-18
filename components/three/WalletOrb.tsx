@@ -5,6 +5,7 @@ import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { MeshDistortMaterial } from "@react-three/drei";
 import * as THREE from "three";
+import type { OrbState } from "@/lib/stores/orbStore";
 
 const PARTICLE_COUNT = 1500;
 const PARTICLE_RADIUS_MIN = 2.4;
@@ -19,7 +20,8 @@ type DistortMaterial = THREE.MeshStandardMaterial & {
   speed: number;
 };
 
-export type OrbState = "idle" | "processing" | "confirmed" | "error" | "scanning";
+// OrbState is imported from lib/stores/orbStore — re-export for consumers that import from this file
+export type { OrbState };
 
 interface OrbVisual {
   color: string;
