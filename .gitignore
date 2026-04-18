@@ -39,3 +39,5 @@ next-env.d.ts
 
 # scheduled payments db
 db/*.db
+db/*.db-shm
+db/*.db-wal
