@@ -245,12 +245,8 @@ export function ChatInterface() {
     onTranscript: (text) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      if (!connected || busy || pendingMultiStep) {
-        console.warn("[voice] transcript dropped — wallet not ready or busy");
-        return;
-      }
       setInput(trimmed);
-      void send(trimmed);
+      inputRef.current?.focus();
     },
     onError: (err) => console.warn("[voice]", err),
   });
