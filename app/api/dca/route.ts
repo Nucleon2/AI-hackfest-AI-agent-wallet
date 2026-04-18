@@ -97,8 +97,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const dayOfWeek =
-    dca.interval === "weekly" ? parseDayOfWeek(dca.day_of_week) : null;
+  let dayOfWeek: number | null = null;
+  if (dca.interval === "weekly") {
+    if (dca.day_of_week) {
+      const parsed = parseDayOfWeek(dca.day_of_week);
+      if (parsed === null) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Invalid day_of_week: ${dca.day_of_week}. Expected a weekday name like "monday".`,
+          },
+          { status: 400 }
+        );
+      }
+      dayOfWeek = parsed;
+    } else {
+      dayOfWeek = 1; // Monday default — persisted so the stored order matches what will run
+    }
+  }
   const nowMs = Date.now();
   const nextRunAt = computeFirstDCARun(dca.interval, dayOfWeek, nowMs);
 

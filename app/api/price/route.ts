@@ -13,21 +13,22 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const mints: string[] = [];
   const symbolToMint: Record<string, string> = {};
-  for (const symbol of tokenParams) {
+  for (const raw of tokenParams) {
+    const symbol = raw.trim().toUpperCase();
+    if (!symbol || symbolToMint[symbol]) continue;
     const info = getToken(symbol);
     if (!info) {
       return NextResponse.json(
-        { success: false, error: `Unsupported token: ${symbol}` },
+        { success: false, error: `Unsupported token: ${raw}` },
         { status: 400 }
       );
     }
-    mints.push(info.mint);
-    symbolToMint[symbol.toUpperCase()] = info.mint;
+    symbolToMint[symbol] = info.mint;
   }
 
-  const pricesByMint = await fetchTokenPrices(mints);
+  const uniqueMints = Array.from(new Set(Object.values(symbolToMint)));
+  const pricesByMint = await fetchTokenPrices(uniqueMints);
   const data: Record<string, number> = {};
   for (const [symbol, mint] of Object.entries(symbolToMint)) {
     data[symbol] = pricesByMint[mint] ?? 0;

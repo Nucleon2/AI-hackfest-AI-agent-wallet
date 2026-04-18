@@ -355,8 +355,10 @@ export function isIntent(value: unknown): value is Intent {
         (value.interval === "daily" ||
           value.interval === "weekly" ||
           value.interval === "monthly") &&
-        (value.duration === undefined || typeof value.duration === "number") &&
-        (value.day_of_week === undefined || typeof value.day_of_week === "string")
+        (value.duration === undefined ||
+          (Number.isInteger(value.duration) && (value.duration as number) > 0)) &&
+        (value.day_of_week === undefined ||
+          (typeof value.day_of_week === "string" && value.interval === "weekly"))
       );
     case "view_dca":
       return true;
