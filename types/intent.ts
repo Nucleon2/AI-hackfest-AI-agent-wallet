@@ -1,4 +1,12 @@
-export type IntentAction = "send" | "swap" | "balance" | "history" | "unknown";
+export type IntentAction =
+  | "send"
+  | "swap"
+  | "balance"
+  | "history"
+  | "unknown"
+  | "schedule"
+  | "view_schedules"
+  | "cancel_schedule";
 
 export interface SendIntent {
   action: "send";
@@ -31,12 +39,35 @@ export interface UnknownIntent {
   clarification: string;
 }
 
+export interface ScheduleIntent {
+  action: "schedule";
+  amount: number;
+  token: string;
+  recipient: string;
+  frequency: "once" | "daily" | "weekly" | "monthly";
+  day_of_week?: string;
+  scheduled_date?: string;
+  label: string;
+}
+
+export interface ViewSchedulesIntent {
+  action: "view_schedules";
+}
+
+export interface CancelScheduleIntent {
+  action: "cancel_schedule";
+  description?: string;
+}
+
 export type Intent =
   | SendIntent
   | SwapIntent
   | BalanceIntent
   | HistoryIntent
-  | UnknownIntent;
+  | UnknownIntent
+  | ScheduleIntent
+  | ViewSchedulesIntent
+  | CancelScheduleIntent;
 
 export interface WalletContext {
   publicKey?: string;
@@ -69,6 +100,24 @@ export function isIntent(value: unknown): value is Intent {
       return value.limit === undefined || typeof value.limit === "number";
     case "unknown":
       return typeof value.clarification === "string";
+    case "schedule":
+      return (
+        typeof value.amount === "number" &&
+        typeof value.token === "string" &&
+        typeof value.recipient === "string" &&
+        typeof value.label === "string" &&
+        (value.frequency === "once" ||
+          value.frequency === "daily" ||
+          value.frequency === "weekly" ||
+          value.frequency === "monthly")
+      );
+    case "view_schedules":
+      return true;
+    case "cancel_schedule":
+      return (
+        value.description === undefined ||
+        typeof value.description === "string"
+      );
     default:
       return false;
   }

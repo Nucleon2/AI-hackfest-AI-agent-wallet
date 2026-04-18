@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import type { VersionedTransaction } from "@solana/web3.js";
+import { PublicKey, type VersionedTransaction } from "@solana/web3.js";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { PortfolioCard } from "@/components/PortfolioCard";
 import { ReceiptCard } from "@/components/ReceiptCard";
 import { TransactionHistoryCard } from "@/components/TransactionHistoryCard";
+import { ScheduledPaymentsCard } from "@/components/ScheduledPaymentsCard";
 import {
   TransactionPreview,
   type PreviewStatus,
@@ -15,18 +16,21 @@ import {
 } from "@/components/TransactionPreview";
 import { useOrbStore } from "@/lib/stores/orbStore";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
+import { useScheduledPayments } from "@/hooks/useScheduledPayments";
 import {
   buildSolTransferTx,
   deserializeSwapTx,
+  shortAddress,
   validateRecipient,
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
 import type { JupiterQuote } from "@/lib/jupiterClient";
 import type { Intent, SendIntent, SwapIntent } from "@/types/intent";
+import type { ScheduledPayment } from "@/types/schedule";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "ai";
-type MessageComponent = "portfolio" | "receipt" | "history";
+type MessageComponent = "portfolio" | "receipt" | "history" | "schedules";
 
 type ReceiptPayload =
   | {
@@ -69,6 +73,8 @@ const SUGGESTIONS = [
   "Swap 10 USDC for SOL",
   "Send 0.1 SOL to alice.sol",
   "Show my last 5 transactions",
+  "Send 5 SOL every Friday",
+  "Show my scheduled payments",
 ];
 
 interface PreparedTx {
@@ -114,6 +120,19 @@ export function ChatInterface() {
   const [swapQuoteDisplay, setSwapQuoteDisplay] =
     useState<SwapQuoteDisplay | null>(null);
   const preparedSwapRef = useRef<PreparedSwap | null>(null);
+
+  const [pendingScheduledExec, setPendingScheduledExec] =
+    useState<ScheduledPayment | null>(null);
+  const [scheduleExecStatus, setScheduleExecStatus] =
+    useState<PreviewStatus>("building");
+  const [scheduleExecError, setScheduleExecError] = useState<string | null>(
+    null
+  );
+  const [scheduleExecFee, setScheduleExecFee] = useState<number | null>(null);
+  const preparedScheduleRef = useRef<PreparedTx | null>(null);
+
+  const { schedules, duePayment, loading: schedulesLoading, refresh: refreshSchedules, clearDue } =
+    useScheduledPayments(publicKey?.toBase58() ?? null);
 
   const orbResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -262,6 +281,72 @@ export function ChatInterface() {
     };
   }, [pendingSwap, publicKey]);
 
+  useEffect(() => {
+    if (!duePayment) return;
+    appendMessage({
+      id: crypto.randomUUID(),
+      role: "ai",
+      text: `Scheduled payment due: ${duePayment.amount_sol} ${duePayment.token} → ${shortAddress(duePayment.recipient, 4, 4)} (${duePayment.label ?? duePayment.frequency}). Ready to execute.`,
+      ts: Date.now(),
+    });
+    setPendingScheduledExec(duePayment);
+    clearDue();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [duePayment]);
+
+  useEffect(() => {
+    if (!pendingScheduledExec) return;
+    let cancelled = false;
+
+    async function preflightScheduled(row: ScheduledPayment) {
+      setScheduleExecStatus("building");
+      setScheduleExecError(null);
+      setScheduleExecFee(null);
+      preparedScheduleRef.current = null;
+
+      if (row.token !== "SOL") {
+        if (cancelled) return;
+        setScheduleExecError("Only SOL scheduled payments are supported right now.");
+        setScheduleExecStatus("error");
+        return;
+      }
+
+      try {
+        if (!publicKey) throw new Error("Wallet not connected.");
+        const toPubkey = new PublicKey(row.recipient);
+        const built = await buildSolTransferTx({
+          connection,
+          from: publicKey,
+          to: toPubkey,
+          amountSol: row.amount_sol,
+        });
+        if (cancelled) return;
+        preparedScheduleRef.current = {
+          transaction: built.transaction,
+          blockhashInfo: built.blockhashInfo,
+        };
+        setScheduleExecFee(built.feeLamports);
+        setScheduleExecStatus("ready");
+      } catch (err) {
+        if (cancelled) return;
+        setScheduleExecError(
+          err instanceof Error ? err.message : "Failed to build transaction."
+        );
+        setScheduleExecStatus("error");
+      }
+    }
+
+    if (!publicKey) {
+      setScheduleExecError("Connect your wallet to send.");
+      setScheduleExecStatus("error");
+      return;
+    }
+    preflightScheduled(pendingScheduledExec);
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingScheduledExec, publicKey, connection]);
+
   function scheduleOrbReset(delayMs = 2000) {
     if (orbResetTimerRef.current) clearTimeout(orbResetTimerRef.current);
     orbResetTimerRef.current = setTimeout(() => {
@@ -325,6 +410,42 @@ export function ChatInterface() {
           ts: Date.now(),
         });
         setPendingSwap(data.data);
+      } else if (data.data.action === "schedule") {
+        const intent = data.data;
+        const res2 = await fetch("/api/schedules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ intent, walletPubkey: publicKey?.toBase58() }),
+        });
+        const json2 = (await res2.json()) as
+          | { success: true; data: ScheduledPayment }
+          | { success: false; error?: string };
+        if (json2.success) {
+          refreshSchedules();
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: `Scheduled! I'll remind you to send ${intent.amount} ${intent.token} — ${intent.label}.`,
+            ts: Date.now(),
+          });
+        } else {
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: json2.error ?? "Failed to schedule payment.",
+            ts: Date.now(),
+          });
+        }
+      } else if (
+        data.data.action === "view_schedules" ||
+        data.data.action === "cancel_schedule"
+      ) {
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          component: "schedules",
+          ts: Date.now(),
+        });
       } else {
         appendMessage(intentToMessage(data.data));
       }
@@ -529,6 +650,115 @@ export function ChatInterface() {
     });
   }
 
+  async function handleConfirmScheduledExec() {
+    const prepared = preparedScheduleRef.current;
+    const row = pendingScheduledExec;
+    if (!prepared || !row || !publicKey) return;
+
+    setScheduleExecStatus("signing");
+    setOrbStatus("processing");
+
+    let signature: string;
+    try {
+      signature = await sendTransaction(prepared.transaction, connection);
+      setScheduleExecStatus("confirming");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Transaction rejected.";
+      setScheduleExecError(msg);
+      setScheduleExecStatus("error");
+      setOrbStatus("error");
+      scheduleOrbReset();
+      return;
+    }
+
+    try {
+      const result = await connection.confirmTransaction(
+        {
+          signature,
+          blockhash: prepared.blockhashInfo.blockhash,
+          lastValidBlockHeight: prepared.blockhashInfo.lastValidBlockHeight,
+        },
+        "confirmed"
+      );
+      if (result.value.err) {
+        throw new Error("Transaction failed on chain.");
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Transaction failed.";
+      setScheduleExecError(msg);
+      setScheduleExecStatus("error");
+      setOrbStatus("error");
+      scheduleOrbReset();
+      return;
+    }
+
+    try {
+      await fetch(`/api/schedules/${row.id}/executed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ walletPubkey: publicKey.toBase58(), signature }),
+      });
+    } catch {
+      // non-fatal — tx already confirmed on chain
+    }
+
+    setPendingScheduledExec(null);
+    preparedScheduleRef.current = null;
+    setOrbStatus("confirmed");
+    scheduleOrbReset();
+    refreshSchedules();
+
+    appendMessage({
+      id: crypto.randomUUID(),
+      role: "ai",
+      component: "receipt",
+      receipt: {
+        kind: "send",
+        signature,
+        amount: row.amount_sol,
+        token: row.token,
+        recipient: row.recipient,
+        network: SOLANA_NETWORK,
+      },
+      ts: Date.now(),
+    });
+  }
+
+  function handleCancelScheduledExec() {
+    if (
+      scheduleExecStatus === "signing" ||
+      scheduleExecStatus === "sending" ||
+      scheduleExecStatus === "confirming"
+    )
+      return;
+    setPendingScheduledExec(null);
+    preparedScheduleRef.current = null;
+    appendMessage({
+      id: crypto.randomUUID(),
+      role: "ai",
+      text: "Scheduled payment skipped for now.",
+      ts: Date.now(),
+    });
+  }
+
+  async function handleCancelSchedule(id: string) {
+    if (!publicKey) return;
+    const res = await fetch(`/api/schedules/${id}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ walletPubkey: publicKey.toBase58() }),
+    });
+    if (res.ok) {
+      refreshSchedules();
+      appendMessage({
+        id: crypto.randomUUID(),
+        role: "ai",
+        text: "Scheduled payment cancelled.",
+        ts: Date.now(),
+      });
+    }
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -541,7 +771,13 @@ export function ChatInterface() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-4 px-1 py-2 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10">
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            scheduledPayments={schedules}
+            schedulesLoading={schedulesLoading}
+            onCancelSchedule={handleCancelSchedule}
+          />
         ))}
         {busy && <TypingIndicator />}
         <div ref={bottomRef} />
@@ -625,12 +861,37 @@ export function ChatInterface() {
           onConfirm={handleConfirmSwap}
           onCancel={handleCancelPreview}
         />
+      ) : pendingScheduledExec ? (
+        <TransactionPreview
+          intent={{
+            action: "send",
+            amount: pendingScheduledExec.amount_sol,
+            token: pendingScheduledExec.token,
+            recipient: pendingScheduledExec.recipient,
+          }}
+          status={scheduleExecStatus}
+          errorMessage={scheduleExecError}
+          feeLamports={scheduleExecFee}
+          recipientPubkey={pendingScheduledExec.recipient}
+          onConfirm={handleConfirmScheduledExec}
+          onCancel={handleCancelScheduledExec}
+        />
       ) : null}
     </div>
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({
+  message,
+  scheduledPayments,
+  schedulesLoading,
+  onCancelSchedule,
+}: {
+  message: Message;
+  scheduledPayments: ScheduledPayment[];
+  schedulesLoading: boolean;
+  onCancelSchedule: (id: string) => void;
+}) {
   const isUser = message.role === "user";
   return (
     <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
@@ -655,6 +916,14 @@ function MessageBubble({ message }: { message: Message }) {
       ) : message.component === "receipt" && message.receipt ? (
         <div className="max-w-[80%] flex-1">
           <ReceiptCard {...message.receipt} />
+        </div>
+      ) : message.component === "schedules" ? (
+        <div className="max-w-[90%] flex-1">
+          <ScheduledPaymentsCard
+            schedules={scheduledPayments}
+            onCancel={onCancelSchedule}
+            loading={schedulesLoading}
+          />
         </div>
       ) : (
         <div
@@ -731,5 +1000,10 @@ function intentToMessage(intent: Intent): Message {
       };
     case "unknown":
       return { ...base, text: intent.clarification };
+    case "schedule":
+      return { ...base, text: `Scheduling ${intent.amount} ${intent.token} — ${intent.label}.` };
+    case "view_schedules":
+    case "cancel_schedule":
+      return { ...base, component: "schedules" as const };
   }
 }
