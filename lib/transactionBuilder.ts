@@ -3,6 +3,7 @@ import {
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
+  Transaction,
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
@@ -104,4 +105,19 @@ export function deserializeSwapTx(base64: string): VersionedTransaction {
       ? Buffer.from(base64, "base64")
       : Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   return VersionedTransaction.deserialize(buf);
+}
+
+// Marinade's SDK emits fully-formed legacy Transactions. We serialize
+// and transport them verbatim rather than repacking into a v0 message,
+// because replaying the instructions strips metadata the SDK expects
+// (exact signer ordering, compute-budget placement) and risks a silent
+// drift between what the preview builds and what the wallet signs.
+// The wallet adapter's sendTransaction accepts legacy Transactions
+// directly, so there's no upside to converting.
+export function deserializeLegacyTx(base64: string): Transaction {
+  const buf =
+    typeof Buffer !== "undefined"
+      ? Buffer.from(base64, "base64")
+      : Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return Transaction.from(buf);
 }

@@ -16,12 +16,17 @@ export type IntentAction =
   | "pause_portfolio"
   | "resume_portfolio"
   | "set_drift_threshold"
+  | "stake"
+  | "unstake"
+  | "staking_status"
   | "explain_tx"
   | "spending_insights"
   | "dca"
   | "view_dca"
   | "cancel_dca"
   | "price_alert";
+
+export type StakingProvider = "marinade" | "jito";
 
 export interface PortfolioTarget {
   token: string;
@@ -199,6 +204,22 @@ export interface MultiStepIntent {
   description: string;
 }
 
+export interface StakeIntent {
+  action: "stake";
+  amount: number;
+  provider: StakingProvider;
+}
+
+export interface UnstakeIntent {
+  action: "unstake";
+  amount: number | null;
+  provider: StakingProvider;
+}
+
+export interface StakingStatusIntent {
+  action: "staking_status";
+}
+
 export interface DCAIntent {
   action: "dca";
   inputToken: string;
@@ -270,6 +291,9 @@ export type Intent =
   | PausePortfolioIntent
   | ResumePortfolioIntent
   | SetDriftThresholdIntent
+  | StakeIntent
+  | UnstakeIntent
+  | StakingStatusIntent
   | ExplainTxIntent
   | SpendingInsightsIntent
   | DCAIntent
@@ -359,6 +383,19 @@ export function isIntent(value: unknown): value is Intent {
       return true;
     case "set_drift_threshold":
       return typeof value.threshold === "number" && value.threshold > 0;
+    case "stake":
+      return (
+        typeof value.amount === "number" &&
+        value.amount > 0 &&
+        (value.provider === "marinade" || value.provider === "jito")
+      );
+    case "unstake":
+      return (
+        (value.amount === null || (typeof value.amount === "number" && value.amount > 0)) &&
+        (value.provider === "marinade" || value.provider === "jito")
+      );
+    case "staking_status":
+      return true;
     case "explain_tx":
       return typeof value.signature === "string" && value.signature.length > 0;
     case "spending_insights":

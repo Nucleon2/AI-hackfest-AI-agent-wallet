@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, type VersionedTransaction } from "@solana/web3.js";
+import { PublicKey, type Transaction, type VersionedTransaction } from "@solana/web3.js";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { PortfolioCard } from "@/components/PortfolioCard";
@@ -17,8 +17,10 @@ import { useChatSessions } from "@/hooks/useChatSessions";
 import {
   TransactionPreview,
   type PreviewStatus,
+  type StakeQuoteDisplay,
   type SwapQuoteDisplay,
 } from "@/components/TransactionPreview";
+import { StakingCard } from "@/components/StakingCard";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
 import { useScheduledPayments } from "@/hooks/useScheduledPayments";
 import { useDCAManager } from "@/hooks/useDCAManager";
@@ -26,13 +28,33 @@ import { useChatSessionStore } from "@/lib/stores/chatSessionStore";
 import type { ChatMessageRow } from "@/lib/db";
 import {
   buildSolTransferTx,
+  deserializeLegacyTx,
   deserializeSwapTx,
   shortAddress,
   validateRecipient,
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
 import type { JupiterQuote } from "@/lib/jupiterClient";
-import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent, MultiStepIntent, SetPortfolioIntent, RebalanceSwap, ExplainTxIntent, DCAIntent, CancelDCAIntent, PriceAlertIntent, DCAOrder, PriceAlert } from "@/types/intent";
+import type {
+  Intent,
+  SendIntent,
+  SwapIntent,
+  SaveContactIntent,
+  ListContactsIntent,
+  DeleteContactIntent,
+  MultiStepIntent,
+  SetPortfolioIntent,
+  RebalanceSwap,
+  StakeIntent,
+  StakingProvider,
+  UnstakeIntent,
+  ExplainTxIntent,
+  DCAIntent,
+  CancelDCAIntent,
+  PriceAlertIntent,
+  DCAOrder,
+  PriceAlert,
+} from "@/types/intent";
 import { PortfolioManagerCard } from "@/components/PortfolioManagerCard";
 import { ExplanationCard, type ExplanationCardProps } from "@/components/ExplanationCard";
 import { InsightsCard, type InsightsPayload } from "@/components/InsightsCard";
@@ -45,7 +67,17 @@ import { VoiceInputButton } from "@/components/VoiceInputButton";
 import { VoiceWaveform } from "@/components/VoiceWaveform";
 
 type Role = "user" | "ai";
-type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts" | "portfolio_manager" | "explanation" | "insights" | "dca_manager";
+type MessageComponent =
+  | "portfolio"
+  | "receipt"
+  | "history"
+  | "schedules"
+  | "contacts"
+  | "portfolio_manager"
+  | "staking"
+  | "explanation"
+  | "insights"
+  | "dca_manager";
 
 type ReceiptPayload =
   | {
@@ -63,6 +95,14 @@ type ReceiptPayload =
       fromToken: string;
       toAmount: number;
       toToken: string;
+      network: SolanaNetwork;
+    }
+  | {
+      kind: "stake" | "unstake";
+      signature: string;
+      provider: StakingProvider;
+      inputAmount: number;
+      outputAmount: number;
       network: SolanaNetwork;
     };
 
@@ -136,6 +176,8 @@ function componentSummary(component: MessageComponent, msg: Message): string {
       return "[AI showed address book contacts]";
     case "portfolio_manager":
       return "[AI showed portfolio manager with allocation targets]";
+    case "staking":
+      return "[AI showed liquid staking positions and APY]";
     case "explanation":
       return msg.explanation
         ? `[AI explained tx: ${msg.explanation.summary}]`
@@ -232,6 +274,15 @@ export function ChatInterface() {
     useState<SwapQuoteDisplay | null>(null);
   const preparedSwapRef = useRef<PreparedSwap | null>(null);
 
+  const [pendingStake, setPendingStake] = useState<
+    StakeIntent | UnstakeIntent | null
+  >(null);
+  const [stakePreviewStatus, setStakePreviewStatus] =
+    useState<PreviewStatus>("building");
+  const [stakePreviewError, setStakePreviewError] = useState<string | null>(null);
+  const [stakeQuoteDisplay, setStakeQuoteDisplay] =
+    useState<StakeQuoteDisplay | null>(null);
+
   const [pendingScheduledExec, setPendingScheduledExec] =
     useState<ScheduledPayment | null>(null);
   const [scheduleExecStatus, setScheduleExecStatus] =
@@ -257,6 +308,13 @@ export function ChatInterface() {
 
   // --- Portfolio manager ---
   const [portfolioMsgIds, setPortfolioMsgIds] = useState<string[]>([]);
+
+  const requestUnstake = useCallback(
+    (provider: StakingProvider, amount: number) => {
+      setPendingStake({ action: "unstake", amount, provider });
+    },
+    []
+  );
 
   const executeRebalanceSwap = useCallback(async (swap: RebalanceSwap): Promise<boolean> => {
     if (!publicKey) return false;
@@ -676,6 +734,107 @@ export function ChatInterface() {
   }, [pendingSwap, publicKey]);
 
   useEffect(() => {
+    if (!pendingStake) return;
+    let cancelled = false;
+
+    async function preflightStake(intent: StakeIntent | UnstakeIntent) {
+      setStakePreviewStatus("building");
+      setStakePreviewError(null);
+      setStakeQuoteDisplay(null);
+
+      if (!publicKey) {
+        if (cancelled) return;
+        setStakePreviewError("Connect your wallet to stake.");
+        setStakePreviewStatus("error");
+        return;
+      }
+
+      let amount = typeof intent.amount === "number" ? intent.amount : null;
+
+      // "unstake all" / "unstake my mSOL" → amount is null. Resolve to
+      // the current balance from the staking status endpoint before
+      // calling the preview.
+      if (amount === null && intent.action === "unstake") {
+        try {
+          const statusRes = await fetch(
+            `/api/stake/status?wallet=${encodeURIComponent(publicKey.toBase58())}`,
+            { cache: "no-store" }
+          );
+          const statusJson = (await statusRes.json()) as
+            | { success: true; data: { msolBalance: number; jitoBalance: number } }
+            | { success: false; error?: string };
+          if (cancelled) return;
+          if (statusJson.success) {
+            const bal =
+              intent.provider === "jito"
+                ? statusJson.data.jitoBalance
+                : statusJson.data.msolBalance;
+            if (bal > 0) {
+              amount = bal;
+              setPendingStake({ ...intent, amount: bal });
+              return;
+            }
+            setStakePreviewError(
+              `You have no ${intent.provider === "jito" ? "JitoSOL" : "mSOL"} to unstake.`
+            );
+            setStakePreviewStatus("error");
+            return;
+          }
+        } catch {
+          // fall through — show the generic "need an amount" error below
+        }
+      }
+
+      if (amount === null) {
+        if (cancelled) return;
+        setStakePreviewError(
+          intent.action === "unstake"
+            ? "I need an amount to unstake. Try \"unstake 1 mSOL\"."
+            : "I need a SOL amount to stake."
+        );
+        setStakePreviewStatus("error");
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/stake", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: intent.action,
+            amount,
+            provider: intent.provider,
+            userPublicKey: publicKey.toBase58(),
+            preview: true,
+          }),
+        });
+        const json = (await res.json()) as
+          | { success: true; data: { display: StakeQuoteDisplay } }
+          | { success: false; error?: string };
+        if (cancelled) return;
+        if (!json.success) {
+          setStakePreviewError(json.error ?? "Failed to fetch staking quote.");
+          setStakePreviewStatus("error");
+          return;
+        }
+        setStakeQuoteDisplay(json.data.display);
+        setStakePreviewStatus("ready");
+      } catch (err) {
+        if (cancelled) return;
+        setStakePreviewError(
+          err instanceof Error ? err.message : "Failed to fetch staking quote."
+        );
+        setStakePreviewStatus("error");
+      }
+    }
+
+    preflightStake(pendingStake);
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingStake, publicKey]);
+
+  useEffect(() => {
     if (!duePayment) return;
     appendMessage({
       id: crypto.randomUUID(),
@@ -773,6 +932,14 @@ export function ChatInterface() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoApprove, swapPreviewStatus, pendingSwap, pendingMultiStep]);
+
+  useEffect(() => {
+    if (pendingMultiStep) return;
+    if (autoApprove && stakePreviewStatus === "ready" && pendingStake) {
+      handleConfirmStake();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApprove, stakePreviewStatus, pendingStake, pendingMultiStep]);
 
   useEffect(() => {
     if (autoApprove && scheduleExecStatus === "ready" && pendingScheduledExec) {
@@ -1145,6 +1312,27 @@ export function ChatInterface() {
           ts: Date.now(),
         });
         await executeMultiStep(msIntent);
+      } else if (data.data.action === "stake" || data.data.action === "unstake") {
+        const stakeIntent = data.data;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet to stake.", ts: Date.now() });
+        } else {
+          const providerLabel = stakeIntent.provider === "jito" ? "Jito" : "Marinade";
+          const actionLabel = stakeIntent.action === "stake" ? "stake" : "unstake";
+          const amtLabel =
+            typeof stakeIntent.amount === "number"
+              ? `${stakeIntent.amount} ${stakeIntent.action === "stake" ? "SOL" : stakeIntent.provider === "jito" ? "JitoSOL" : "mSOL"}`
+              : "your full balance";
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: `Preparing ${providerLabel} ${actionLabel} for ${amtLabel}…`,
+            ts: Date.now(),
+          });
+          setPendingStake(stakeIntent);
+        }
+      } else if (data.data.action === "staking_status") {
+        appendMessage({ id: crypto.randomUUID(), role: "ai", component: "staking", ts: Date.now() });
       } else if (data.data.action === "explain_tx") {
         const intent = data.data as ExplainTxIntent;
         if (!publicKey) {
@@ -1232,7 +1420,11 @@ export function ChatInterface() {
   }
 
   function handleCancelPreview() {
-    const activeStatus = pendingSwap ? swapPreviewStatus : previewStatus;
+    const activeStatus = pendingStake
+      ? stakePreviewStatus
+      : pendingSwap
+        ? swapPreviewStatus
+        : previewStatus;
     if (
       activeStatus === "sending" ||
       activeStatus === "confirming" ||
@@ -1242,6 +1434,7 @@ export function ChatInterface() {
     }
     setPendingSend(null);
     setPendingSwap(null);
+    setPendingStake(null);
     preparedTxRef.current = null;
     preparedSwapRef.current = null;
     appendMessage({
@@ -1400,6 +1593,104 @@ export function ChatInterface() {
 
     setPendingSwap(null);
     preparedSwapRef.current = null;
+
+    appendMessage({
+      id: crypto.randomUUID(),
+      role: "ai",
+      component: "receipt",
+      receipt,
+      ts: Date.now(),
+    });
+    return true;
+  }
+
+  async function handleConfirmStake(): Promise<boolean> {
+    const intent = pendingStake;
+    const display = stakeQuoteDisplay;
+    if (!intent || !publicKey || typeof intent.amount !== "number") return false;
+
+    setStakePreviewStatus("signing");
+
+    let transaction: Transaction;
+    let lastValidBlockHeight: number;
+    let finalDisplay: StakeQuoteDisplay;
+    try {
+      const res = await fetch("/api/stake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: intent.action,
+          amount: intent.amount,
+          provider: intent.provider,
+          userPublicKey: publicKey.toBase58(),
+        }),
+      });
+      const json = (await res.json()) as
+        | {
+            success: true;
+            data: {
+              stakeTransaction: string;
+              lastValidBlockHeight: number;
+              display: StakeQuoteDisplay;
+            };
+          }
+        | { success: false; error?: string };
+      if (!json.success) {
+        throw new Error(json.error ?? "Failed to build staking transaction.");
+      }
+      transaction = deserializeLegacyTx(json.data.stakeTransaction);
+      lastValidBlockHeight = json.data.lastValidBlockHeight;
+      finalDisplay = json.data.display;
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : "Failed to build staking transaction.";
+      setStakePreviewError(msg);
+      setStakePreviewStatus("error");
+      return false;
+    }
+
+    let signature: string;
+    try {
+      signature = await sendTransaction(transaction, connection);
+      setStakePreviewStatus("confirming");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Transaction rejected.";
+      setStakePreviewError(msg);
+      setStakePreviewStatus("error");
+      return false;
+    }
+
+    try {
+      const blockhash = transaction.recentBlockhash;
+      if (!blockhash) throw new Error("Missing blockhash on signed transaction.");
+      const result = await connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed"
+      );
+      if (result.value.err) {
+        throw new Error(
+          typeof result.value.err === "string"
+            ? result.value.err
+            : "Transaction failed on chain."
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Transaction failed.";
+      setStakePreviewError(msg);
+      setStakePreviewStatus("error");
+      return false;
+    }
+
+    const receipt: ReceiptPayload = {
+      kind: intent.action,
+      signature,
+      provider: intent.provider,
+      inputAmount: finalDisplay.inputAmount ?? display?.inputAmount ?? intent.amount,
+      outputAmount: finalDisplay.outputAmount ?? display?.outputAmount ?? 0,
+      network: SOLANA_NETWORK,
+    };
+
+    setPendingStake(null);
 
     appendMessage({
       id: crypto.randomUUID(),
@@ -1733,6 +2024,7 @@ export function ChatInterface() {
               onDismissRebalanceSwaps={dismissPendingSwaps}
               onToggleAutoExecute={(val) => updatePortfolioConfig({ auto_execute: val })}
               onToggleActive={(val) => updatePortfolioConfig({ is_active: val })}
+              onUnstakeRequest={requestUnstake}
               dcaOrders={dcaOrders}
               priceAlerts={priceAlerts}
               dcaLoading={dcaLoading}
@@ -1856,6 +2148,15 @@ export function ChatInterface() {
           onConfirm={handleConfirmSwap}
           onCancel={handleCancelPreview}
         />
+      ) : pendingStake ? (
+        <TransactionPreview
+          intent={pendingStake}
+          status={stakePreviewStatus}
+          errorMessage={stakePreviewError}
+          quote={stakeQuoteDisplay}
+          onConfirm={handleConfirmStake}
+          onCancel={handleCancelPreview}
+        />
       ) : pendingScheduledExec ? (
         <TransactionPreview
           intent={{
@@ -1893,6 +2194,7 @@ function MessageBubble({
   onDismissRebalanceSwaps,
   onToggleAutoExecute,
   onToggleActive,
+  onUnstakeRequest,
   dcaOrders,
   priceAlerts,
   dcaLoading,
@@ -1916,6 +2218,7 @@ function MessageBubble({
   onDismissRebalanceSwaps: () => void;
   onToggleAutoExecute: (val: boolean) => void;
   onToggleActive: (val: boolean) => void;
+  onUnstakeRequest: (provider: StakingProvider, amount: number) => void;
   dcaOrders: DCAOrder[];
   priceAlerts: PriceAlert[];
   dcaLoading: boolean;
@@ -1985,6 +2288,10 @@ function MessageBubble({
             onToggleAutoExecute={onToggleAutoExecute}
             onToggleActive={onToggleActive}
           />
+        </div>
+      ) : message.component === "staking" ? (
+        <div className="max-w-[90%] flex-1">
+          <StakingCard onUnstakeRequest={onUnstakeRequest} />
         </div>
       ) : message.component === "explanation" && message.explanation ? (
         <div className="max-w-[90%] flex-1">
@@ -2102,6 +2409,11 @@ function intentToMessage(intent: Intent): Message {
       return { ...base, component: "portfolio_manager" as const };
     case "set_drift_threshold":
       return { ...base, text: `Drift threshold updated to ${intent.threshold}%.` };
+    case "stake":
+    case "unstake":
+      return { ...base, text: `Preparing ${intent.provider === "jito" ? "Jito" : "Marinade"} ${intent.action}…` };
+    case "staking_status":
+      return { ...base, component: "staking" as const };
     case "explain_tx":
       return { ...base, text: `Looking up transaction ${shortAddress(intent.signature, 8, 8)}…` };
     case "spending_insights":

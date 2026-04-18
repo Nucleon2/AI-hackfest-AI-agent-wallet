@@ -2,7 +2,13 @@
 
 import { useEffect } from "react";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
-import type { SendIntent, SwapIntent } from "@/types/intent";
+import type {
+  SendIntent,
+  StakeIntent,
+  StakingProvider,
+  SwapIntent,
+  UnstakeIntent,
+} from "@/types/intent";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { shortAddress } from "@/lib/transactionBuilder";
@@ -37,7 +43,22 @@ interface SwapFields extends CommonFields {
   quote?: SwapQuoteDisplay | null;
 }
 
-type TransactionPreviewProps = SendFields | SwapFields;
+export interface StakeQuoteDisplay {
+  action: "stake" | "unstake";
+  provider: StakingProvider;
+  inputAmount: number;
+  outputAmount: number;
+  mSolPrice: number;
+  apy: number;
+  feePct: number;
+}
+
+interface StakeFields extends CommonFields {
+  intent: StakeIntent | UnstakeIntent;
+  quote?: StakeQuoteDisplay | null;
+}
+
+type TransactionPreviewProps = SendFields | SwapFields | StakeFields;
 
 const STATUS_LABEL: Record<PreviewStatus, string> = {
   building: "Preparing transaction…",
@@ -50,6 +71,17 @@ const STATUS_LABEL: Record<PreviewStatus, string> = {
 
 function isSwapProps(p: TransactionPreviewProps): p is SwapFields {
   return p.intent.action === "swap";
+}
+
+function isStakeProps(p: TransactionPreviewProps): p is StakeFields {
+  return p.intent.action === "stake" || p.intent.action === "unstake";
+}
+
+function stakeHeaderLabel(intent: StakeIntent | UnstakeIntent): string {
+  const provider = intent.provider === "jito" ? "Jito" : "Marinade";
+  return intent.action === "stake"
+    ? `Confirm stake with ${provider}`
+    : `Confirm unstake from ${provider}`;
 }
 
 export function TransactionPreview(props: TransactionPreviewProps) {
@@ -70,13 +102,19 @@ export function TransactionPreview(props: TransactionPreviewProps) {
     status === "signing" || status === "sending" || status === "confirming";
   const canConfirm = status === "ready" && !hasError;
   const isSwap = isSwapProps(props);
+  const isStake = isStakeProps(props);
+  const headerLabel = isStake
+    ? stakeHeaderLabel(props.intent)
+    : isSwap
+      ? "Confirm swap"
+      : "Confirm send";
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center px-4"
       role="dialog"
       aria-modal="true"
-      aria-label={isSwap ? "Confirm swap" : "Confirm transaction"}
+      aria-label={headerLabel}
     >
       <button
         type="button"
@@ -97,7 +135,7 @@ export function TransactionPreview(props: TransactionPreviewProps) {
 
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-semibold tracking-wide text-white/80 uppercase">
-            {isSwap ? "Confirm swap" : "Confirm send"}
+            {headerLabel}
           </h2>
           <span
             className={cn(
@@ -114,7 +152,9 @@ export function TransactionPreview(props: TransactionPreviewProps) {
         </div>
 
         <div className="space-y-3">
-          {isSwapProps(props) ? (
+          {isStakeProps(props) ? (
+            <StakePreviewBody intent={props.intent} quote={props.quote ?? null} />
+          ) : isSwapProps(props) ? (
             <SwapPreviewBody intent={props.intent} quote={props.quote ?? null} />
           ) : (
             <SendPreviewBody
@@ -330,6 +370,112 @@ function SwapPreviewBody({
         <div className="rounded-xl border border-white/8 bg-white/5 p-3 text-[11px] text-white/50">
           Minimum received after slippage: {formatNumber(quote.otherAmountThresholdUi)}{" "}
           {toSymbol}
+        </div>
+      )}
+    </>
+  );
+}
+
+function StakePreviewBody({
+  intent,
+  quote,
+}: {
+  intent: StakeIntent | UnstakeIntent;
+  quote: StakeQuoteDisplay | null;
+}) {
+  const isStake = intent.action === "stake";
+  const providerLabel = intent.provider === "jito" ? "Jito" : "Marinade";
+  const inSymbol = isStake
+    ? "SOL"
+    : intent.provider === "jito"
+      ? "JitoSOL"
+      : "mSOL";
+  const outSymbol = isStake
+    ? intent.provider === "jito"
+      ? "JitoSOL"
+      : "mSOL"
+    : "SOL";
+  const inputAmount =
+    quote?.inputAmount ?? (typeof intent.amount === "number" ? intent.amount : 0);
+  const outputAmount = quote?.outputAmount ?? null;
+  const apyLabel =
+    quote && Number.isFinite(quote.apy)
+      ? `${(quote.apy * 100).toFixed(2)}%`
+      : "—";
+  const feeLabel =
+    quote && quote.feePct > 0 ? `~${quote.feePct.toFixed(2)}%` : "0%";
+  const rateLabel =
+    quote && Number.isFinite(quote.mSolPrice) && quote.mSolPrice > 0
+      ? isStake
+        ? `1 SOL ≈ ${formatNumber(1 / quote.mSolPrice, 6)} mSOL`
+        : `1 mSOL ≈ ${formatNumber(quote.mSolPrice, 6)} SOL`
+      : "—";
+
+  return (
+    <>
+      <div className="rounded-xl border border-white/8 bg-white/5 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-white/40">
+              You {isStake ? "stake" : "redeem"}
+            </div>
+            <div className="mt-1 text-xl font-semibold text-white">
+              {formatNumber(inputAmount)}{" "}
+              <span className="text-white/60">{inSymbol}</span>
+            </div>
+          </div>
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="shrink-0 text-white/40"
+          >
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+          <div className="text-right">
+            <div className="text-[11px] uppercase tracking-wider text-white/40">
+              You receive (est.)
+            </div>
+            <div className="mt-1 text-xl font-semibold text-white">
+              {outputAmount !== null ? formatNumber(outputAmount) : "—"}{" "}
+              <span className="text-white/60">{outSymbol}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl border border-white/8 bg-white/5 p-3">
+          <div className="text-[11px] uppercase tracking-wider text-white/40">
+            Provider
+          </div>
+          <div className="mt-1 text-sm text-white/85">{providerLabel}</div>
+        </div>
+        <div className="rounded-xl border border-white/8 bg-white/5 p-3">
+          <div className="text-[11px] uppercase tracking-wider text-white/40">
+            {isStake ? "Current APY" : "Unstake fee"}
+          </div>
+          <div className="mt-1 text-sm text-white/85">
+            {isStake ? apyLabel : feeLabel}
+          </div>
+        </div>
+        <div className="col-span-2 rounded-xl border border-white/8 bg-white/5 p-3">
+          <div className="text-[11px] uppercase tracking-wider text-white/40">
+            Rate
+          </div>
+          <div className="mt-1 text-sm text-white/85">{rateLabel}</div>
+        </div>
+      </div>
+
+      {isStake && quote && (
+        <div className="rounded-xl border border-white/8 bg-white/5 p-3 text-[11px] text-white/50">
+          At {(quote.apy * 100).toFixed(2)}% APY, {formatNumber(inputAmount)} SOL
+          earns ~{formatNumber(inputAmount * quote.apy, 4)} SOL per year.
         </div>
       )}
     </>

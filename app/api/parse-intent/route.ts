@@ -11,7 +11,7 @@ Your ONLY job is to convert the user's natural language message into a structure
 
 Rules:
 - Always respond with valid JSON only. No markdown, no explanation, no preamble.
-- Supported actions: "send", "swap", "balance", "history", "unknown", "schedule", "view_schedules", "cancel_schedule", "save_contact", "list_contacts", "delete_contact", "set_portfolio", "view_portfolio", "pause_portfolio", "resume_portfolio", "set_drift_threshold", "explain_tx", "spending_insights", "dca", "view_dca", "cancel_dca", "price_alert"
+- Supported actions: "send", "swap", "balance", "history", "unknown", "schedule", "view_schedules", "cancel_schedule", "save_contact", "list_contacts", "delete_contact", "set_portfolio", "view_portfolio", "pause_portfolio", "resume_portfolio", "set_drift_threshold", "stake", "unstake", "staking_status", "explain_tx", "spending_insights", "dca", "view_dca", "cancel_dca", "price_alert"
 - For "send": extract amount (number), token (string, uppercase), recipient (string). If recipient looks like a contact name (not a valid Solana base58 address), still include it as-is — the frontend will resolve it against the address book.
 - For "swap": extract fromToken, toToken, amount. Default slippageBps to 50 if not specified.
 - For "balance": if the user asks about a specific token, include it. Otherwise omit token field.
@@ -88,6 +88,33 @@ For "set_drift_threshold": user wants to change how sensitive the rebalancing tr
   Triggers: "set drift threshold to X%", "rebalance when drift exceeds X%", "change rebalance sensitivity to X%", "trigger rebalance at X%".
   Extract: threshold (number, percentage value, e.g. 3 for 3%).
   -> { "action": "set_drift_threshold", "threshold": 3 }
+
+For "stake": user wants to liquid-stake SOL and receive mSOL (Marinade) or JitoSOL (Jito).
+  Extract: amount (number, SOL), provider ("marinade" default; "jito" only if the user names Jito or JitoSOL).
+  Triggers: "stake X SOL", "stake X SOL with Jito", "liquid stake X SOL", "earn yield on X SOL".
+  Examples:
+    "stake 5 SOL"
+      -> { "action": "stake", "amount": 5, "provider": "marinade" }
+    "stake 5 SOL with Jito"
+      -> { "action": "stake", "amount": 5, "provider": "jito" }
+    "liquid stake 0.5 SOL"
+      -> { "action": "stake", "amount": 0.5, "provider": "marinade" }
+
+For "unstake": user wants to redeem mSOL/JitoSOL back to SOL via the liquid unstake pool.
+  Extract: amount (number in the liquid token units, or null to unstake the full balance),
+           provider ("marinade" for mSOL, "jito" for JitoSOL; infer from the token the user names).
+  Triggers: "unstake my mSOL", "unstake 2 mSOL", "redeem my staked SOL", "unstake all JitoSOL".
+  Examples:
+    "unstake my mSOL"
+      -> { "action": "unstake", "amount": null, "provider": "marinade" }
+    "unstake 2 mSOL"
+      -> { "action": "unstake", "amount": 2, "provider": "marinade" }
+    "unstake all JitoSOL"
+      -> { "action": "unstake", "amount": null, "provider": "jito" }
+
+For "staking_status": user wants to see their current staking position, APY, and yield.
+  Triggers: "how much yield am I earning?", "show my staking", "what's my APY?", "staking status", "my staked SOL".
+  -> { "action": "staking_status" }
 
 For "dca": the user wants to set up dollar-cost averaging — recurring token buys denominated in USD.
   Triggers: "DCA $X into Y", "buy $X of Y every day/week/month", "dollar cost average", "set up recurring buys".
