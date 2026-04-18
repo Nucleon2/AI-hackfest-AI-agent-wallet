@@ -30,6 +30,17 @@ export function getDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled_wallet
       ON scheduled_payments (wallet_pubkey, status, next_execution_at);
+
+    CREATE TABLE IF NOT EXISTS contacts (
+      id            TEXT PRIMARY KEY,
+      wallet_pubkey TEXT NOT NULL,
+      name          TEXT NOT NULL COLLATE NOCASE,
+      address       TEXT NOT NULL,
+      created_at    INTEGER NOT NULL,
+      UNIQUE(wallet_pubkey, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_contacts_wallet
+      ON contacts (wallet_pubkey, name);
   `);
   return _db;
 }
