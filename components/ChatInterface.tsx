@@ -10,6 +10,7 @@ import { ReceiptCard } from "@/components/ReceiptCard";
 import { TransactionHistoryCard } from "@/components/TransactionHistoryCard";
 import { ScheduledPaymentsCard } from "@/components/ScheduledPaymentsCard";
 import { ContactsCard } from "@/components/ContactsCard";
+import { DCACard } from "@/components/DCACard";
 import { AutoApproveToggle } from "@/components/AutoApproveToggle";
 import { useAutoApprove } from "@/hooks/useAutoApprove";
 import { useChatSessions } from "@/hooks/useChatSessions";
@@ -20,6 +21,7 @@ import {
 } from "@/components/TransactionPreview";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
 import { useScheduledPayments } from "@/hooks/useScheduledPayments";
+import { useDCAManager } from "@/hooks/useDCAManager";
 import { useChatSessionStore } from "@/lib/stores/chatSessionStore";
 import type { ChatMessageRow } from "@/lib/db";
 import {
@@ -30,7 +32,7 @@ import {
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
 import type { JupiterQuote } from "@/lib/jupiterClient";
-import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent, MultiStepIntent, SetPortfolioIntent, RebalanceSwap, ExplainTxIntent } from "@/types/intent";
+import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent, MultiStepIntent, SetPortfolioIntent, RebalanceSwap, ExplainTxIntent, DCAIntent, CancelDCAIntent, PriceAlertIntent, DCAOrder, PriceAlert } from "@/types/intent";
 import { PortfolioManagerCard } from "@/components/PortfolioManagerCard";
 import { ExplanationCard, type ExplanationCardProps } from "@/components/ExplanationCard";
 import { InsightsCard, type InsightsPayload } from "@/components/InsightsCard";
@@ -40,7 +42,7 @@ import type { ScheduledPayment } from "@/types/schedule";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "ai";
-type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts" | "portfolio_manager" | "explanation" | "insights";
+type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts" | "portfolio_manager" | "explanation" | "insights" | "dca_manager";
 
 type ReceiptPayload =
   | {
@@ -139,6 +141,8 @@ function componentSummary(component: MessageComponent, msg: Message): string {
       return msg.insights
         ? `[AI showed spending insights: ${msg.insights.txCount} txs, ${msg.insights.totalSolOut.toFixed(4)} SOL out]`
         : "[AI showed spending insights]";
+    case "dca_manager":
+      return "[AI showed DCA orders and price alerts]";
   }
 }
 
@@ -307,6 +311,152 @@ export function ChatInterface() {
     dismissPendingSwaps,
     updateConfig: updatePortfolioConfig,
   } = usePortfolioManager(publicKey?.toBase58() ?? null, executeRebalanceSwap);
+
+  // --- DCA manager ---
+  const handleAlertTriggered = useCallback(
+    ({ alert, currentPrice }: { alert: PriceAlert; currentPrice: number }) => {
+      appendMessage({
+        id: crypto.randomUUID(),
+        role: "ai",
+        text: `${alert.token} just crossed ${alert.direction} $${alert.target_price} — current price $${currentPrice.toFixed(2)}.`,
+        ts: Date.now(),
+      });
+    },
+    // appendMessage is stable — defined below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const {
+    orders: dcaOrders,
+    alerts: priceAlerts,
+    dueOrder: dueDCAOrder,
+    loading: dcaLoading,
+    refresh: refreshDCA,
+    cancelOrder: cancelDCAOrder,
+    deleteAlert: deletePriceAlert,
+    clearDueOrder: clearDueDCAOrder,
+  } = useDCAManager(publicKey?.toBase58() ?? null, handleAlertTriggered);
+
+  const executeDCAOrder = useCallback(
+    async (order: DCAOrder): Promise<boolean> => {
+      if (!publicKey) return false;
+      try {
+        const priceRes = await fetch(
+          `/api/price?token=${encodeURIComponent(order.input_token)}`
+        );
+        const priceJson = (await priceRes.json()) as
+          | { success: true; data: Record<string, number> }
+          | { success: false; error?: string };
+        if (!priceJson.success) return false;
+        const price = priceJson.data[order.input_token];
+        if (!price || price <= 0) return false;
+        const inputUiAmount = order.amount_usd / price;
+
+        const quoteRes = await fetch("/api/swap-quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fromToken: order.input_token,
+            toToken: order.output_token,
+            amount: inputUiAmount,
+            slippageBps: 50,
+          }),
+        });
+        const quoteJson = (await quoteRes.json()) as
+          | { success: true; data: { quote: JupiterQuote; display: SwapQuoteDisplay } }
+          | { success: false; error?: string };
+        if (!quoteJson.success) return false;
+
+        const buildRes = await fetch("/api/swap-build", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            quote: quoteJson.data.quote,
+            userPublicKey: publicKey.toBase58(),
+          }),
+        });
+        const buildJson = (await buildRes.json()) as
+          | { success: true; data: { swapTransaction: string; lastValidBlockHeight: number } }
+          | { success: false; error?: string };
+        if (!buildJson.success) return false;
+
+        const tx = deserializeSwapTx(buildJson.data.swapTransaction);
+        const sig = await sendTransaction(tx, connection);
+        const blockhash = tx.message.recentBlockhash;
+        const result = await connection.confirmTransaction(
+          {
+            signature: sig,
+            blockhash,
+            lastValidBlockHeight: buildJson.data.lastValidBlockHeight,
+          },
+          "confirmed"
+        );
+        if (result.value.err) return false;
+
+        await fetch(`/api/dca/${order.id}/executed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            walletPubkey: publicKey.toBase58(),
+            signature: sig,
+          }),
+        });
+
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          component: "receipt",
+          receipt: {
+            kind: "swap",
+            signature: sig,
+            fromAmount: inputUiAmount,
+            fromToken: order.input_token,
+            toAmount: quoteJson.data.display.outUiAmount,
+            toToken: order.output_token,
+            network: SOLANA_NETWORK,
+          },
+          ts: Date.now(),
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    // appendMessage is defined below — its identity does not change meaningfully per render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [publicKey, sendTransaction, connection]
+  );
+
+  // Auto-execute the due DCA order. Since the user explicitly opted into
+  // recurring buys, we run silently — Phantom will still prompt for signing.
+  const dcaExecutingRef = useRef(false);
+  useEffect(() => {
+    if (!dueDCAOrder || dcaExecutingRef.current) return;
+    if (SOLANA_NETWORK !== "mainnet-beta") {
+      // Swaps fail on devnet; clear the due marker so we don't spin
+      clearDueDCAOrder();
+      return;
+    }
+    dcaExecutingRef.current = true;
+    (async () => {
+      const order = dueDCAOrder;
+      clearDueDCAOrder();
+      const ok = await executeDCAOrder(order);
+      if (ok) {
+        await refreshDCA();
+      } else {
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: `DCA run failed for ${order.input_token} → ${order.output_token}. I'll retry on the next tick.`,
+          ts: Date.now(),
+        });
+      }
+      dcaExecutingRef.current = false;
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dueDCAOrder]);
 
   // When drift is detected and auto-execute is off, show the portfolio card in chat
   const prevPendingSwapsRef = useRef<RebalanceSwap[] | null>(null);
@@ -897,6 +1047,77 @@ export function ChatInterface() {
         } else {
           await updatePortfolioConfig({ drift_threshold: threshold });
           appendMessage({ id: crypto.randomUUID(), role: "ai", text: `Drift threshold updated to ${threshold}%. I'll rebalance when any allocation drifts more than ${threshold}%.`, ts: Date.now() });
+        }
+      } else if (data.data.action === "dca") {
+        const intent = data.data as DCAIntent;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet to set up DCA.", ts: Date.now() });
+        } else {
+          const res2 = await fetch("/api/dca", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ walletPubkey: publicKey.toBase58(), intent }),
+          });
+          const json2 = (await res2.json()) as
+            | { success: true; data: DCAOrder }
+            | { success: false; error?: string };
+          if (json2.success) {
+            await refreshDCA();
+            const durationStr = intent.duration
+              ? ` for ${intent.duration} runs`
+              : "";
+            appendMessage({
+              id: crypto.randomUUID(),
+              role: "ai",
+              text: `DCA set up: $${intent.amountUsd} ${intent.inputToken} → ${intent.outputToken} ${intent.interval}${durationStr}.`,
+              ts: Date.now(),
+            });
+            appendMessage({ id: crypto.randomUUID(), role: "ai", component: "dca_manager", ts: Date.now() });
+          } else {
+            appendMessage({ id: crypto.randomUUID(), role: "ai", text: json2.error ?? "Failed to create DCA order.", ts: Date.now() });
+          }
+        }
+      } else if (data.data.action === "view_dca") {
+        appendMessage({ id: crypto.randomUUID(), role: "ai", component: "dca_manager", ts: Date.now() });
+      } else if (data.data.action === "cancel_dca") {
+        const intent = data.data as CancelDCAIntent;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet first.", ts: Date.now() });
+        } else if (!intent.id) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", component: "dca_manager", ts: Date.now() });
+        } else {
+          const ok = await cancelDCAOrder(intent.id);
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: ok ? "DCA cancelled." : "Couldn't cancel that DCA order.",
+            ts: Date.now(),
+          });
+        }
+      } else if (data.data.action === "price_alert") {
+        const intent = data.data as PriceAlertIntent;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet to create price alerts.", ts: Date.now() });
+        } else {
+          const res2 = await fetch("/api/price-alerts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ walletPubkey: publicKey.toBase58(), intent }),
+          });
+          const json2 = (await res2.json()) as
+            | { success: true; data: PriceAlert }
+            | { success: false; error?: string };
+          if (json2.success) {
+            await refreshDCA();
+            appendMessage({
+              id: crypto.randomUUID(),
+              role: "ai",
+              text: `I'll watch ${intent.token} and ping you when it goes ${intent.direction} $${intent.targetPrice}.`,
+              ts: Date.now(),
+            });
+          } else {
+            appendMessage({ id: crypto.randomUUID(), role: "ai", text: json2.error ?? "Failed to create alert.", ts: Date.now() });
+          }
         }
       } else if (data.data.action === "multi_step") {
         const msIntent = data.data as MultiStepIntent;
@@ -1495,6 +1716,20 @@ export function ChatInterface() {
               onDismissRebalanceSwaps={dismissPendingSwaps}
               onToggleAutoExecute={(val) => updatePortfolioConfig({ auto_execute: val })}
               onToggleActive={(val) => updatePortfolioConfig({ is_active: val })}
+              dcaOrders={dcaOrders}
+              priceAlerts={priceAlerts}
+              dcaLoading={dcaLoading}
+              dcaNetworkWarning={
+                SOLANA_NETWORK !== "mainnet-beta"
+                  ? `DCA swaps require mainnet-beta. Current network: ${SOLANA_NETWORK}. Orders are saved but won't execute until you switch networks.`
+                  : null
+              }
+              onCancelDCA={(id) => {
+                void cancelDCAOrder(id);
+              }}
+              onDeleteAlert={(id) => {
+                void deletePriceAlert(id);
+              }}
             />
           ))}
           {busy && <TypingIndicator />}
@@ -1631,6 +1866,12 @@ function MessageBubble({
   onDismissRebalanceSwaps,
   onToggleAutoExecute,
   onToggleActive,
+  dcaOrders,
+  priceAlerts,
+  dcaLoading,
+  dcaNetworkWarning,
+  onCancelDCA,
+  onDeleteAlert,
 }: {
   message: Message;
   scheduledPayments: ScheduledPayment[];
@@ -1648,6 +1889,12 @@ function MessageBubble({
   onDismissRebalanceSwaps: () => void;
   onToggleAutoExecute: (val: boolean) => void;
   onToggleActive: (val: boolean) => void;
+  dcaOrders: DCAOrder[];
+  priceAlerts: PriceAlert[];
+  dcaLoading: boolean;
+  dcaNetworkWarning: string | null;
+  onCancelDCA: (id: string) => void;
+  onDeleteAlert: (id: string) => void;
 }) {
   const isUser = message.role === "user";
   return (
@@ -1719,6 +1966,17 @@ function MessageBubble({
       ) : message.component === "insights" && message.insights ? (
         <div className="max-w-[90%] flex-1">
           <InsightsCard data={message.insights} />
+        </div>
+      ) : message.component === "dca_manager" ? (
+        <div className="max-w-[90%] flex-1">
+          <DCACard
+            orders={dcaOrders}
+            alerts={priceAlerts}
+            onCancelOrder={onCancelDCA}
+            onDeleteAlert={onDeleteAlert}
+            loading={dcaLoading}
+            networkWarning={dcaNetworkWarning}
+          />
         </div>
       ) : (
         <div
@@ -1821,5 +2079,12 @@ function intentToMessage(intent: Intent): Message {
       return { ...base, text: `Looking up transaction ${shortAddress(intent.signature, 8, 8)}…` };
     case "spending_insights":
       return { ...base, text: "Analyzing your recent transactions…" };
+    case "dca":
+      return { ...base, text: `Setting up DCA: $${intent.amountUsd} ${intent.inputToken} → ${intent.outputToken} ${intent.interval}.` };
+    case "view_dca":
+    case "cancel_dca":
+      return { ...base, component: "dca_manager" as const };
+    case "price_alert":
+      return { ...base, text: `Alert created: ${intent.token} ${intent.direction} $${intent.targetPrice}.` };
   }
 }
