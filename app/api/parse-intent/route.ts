@@ -61,6 +61,34 @@ For "delete_contact": user wants to remove a saved contact.
   Extract: name (the contact name to remove).
   -> { "action": "delete_contact", "name": "Alice" }
 
+For "multi_step": the user has chained 2+ actions with "then", "and then", "after that", "followed by", or similar connective language. Each step executes sequentially and the output of one may feed into the next.
+
+Step types inside multi_step:
+  - { "type": "swap", "fromToken": "USDC", "toToken": "SOL", "amount": 50, "slippageBps": 50 }
+  - { "type": "send", "amount": null, "token": "SOL", "recipient": "<address or contact name>", "memo": null }
+    Set amount to null when the send should use the received amount from the previous swap step.
+    Set amount to a concrete number when the user specified a fixed amount for the send.
+
+Rules for multi_step:
+  - Only return multi_step when there are clearly 2+ sequential actions.
+  - Generate a short English "description" field summarising the whole chain (e.g. "Swap 50 USDC to SOL then send to Ahmad").
+  - Maximum supported steps: 3.
+  - If any step has an unclear recipient or amount that cannot be chained, return action "unknown" with a clarification.
+  - If recipient looks like a contact name (not a base58 address), include it as-is — the frontend will resolve it.
+
+Examples:
+  "Swap 50 USDC to SOL then send it to Ahmad"
+  -> { "action": "multi_step", "description": "Swap 50 USDC to SOL, then send to Ahmad", "steps": [
+       { "type": "swap", "fromToken": "USDC", "toToken": "SOL", "amount": 50, "slippageBps": 50 },
+       { "type": "send", "amount": null, "token": "SOL", "recipient": "Ahmad", "memo": null }
+     ]}
+
+  "Swap 10 USDC to SOL then send 0.5 SOL to Bob"
+  -> { "action": "multi_step", "description": "Swap 10 USDC to SOL, then send 0.5 SOL to Bob", "steps": [
+       { "type": "swap", "fromToken": "USDC", "toToken": "SOL", "amount": 10, "slippageBps": 50 },
+       { "type": "send", "amount": 0.5, "token": "SOL", "recipient": "Bob", "memo": null }
+     ]}
+
 Wallet context will be provided in the user message. Use it to resolve relative amounts like "half my SOL".`;
 
 interface ParseBody {
@@ -144,7 +172,7 @@ export async function POST(req: NextRequest) {
   try {
     response = await client.messages.create({
       model: MODEL,
-      max_tokens: 512,
+      max_tokens: 768,
       system: SYSTEM_PROMPT,
       messages: [
         { role: "user", content: buildUserMessage(message, walletContext) },
