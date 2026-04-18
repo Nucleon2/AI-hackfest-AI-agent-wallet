@@ -6,7 +6,10 @@ export type IntentAction =
   | "unknown"
   | "schedule"
   | "view_schedules"
-  | "cancel_schedule";
+  | "cancel_schedule"
+  | "save_contact"
+  | "list_contacts"
+  | "delete_contact";
 
 export interface SendIntent {
   action: "send";
@@ -59,6 +62,21 @@ export interface CancelScheduleIntent {
   description?: string;
 }
 
+export interface SaveContactIntent {
+  action: "save_contact";
+  name: string;
+  address: string;
+}
+
+export interface ListContactsIntent {
+  action: "list_contacts";
+}
+
+export interface DeleteContactIntent {
+  action: "delete_contact";
+  name: string;
+}
+
 export type Intent =
   | SendIntent
   | SwapIntent
@@ -67,7 +85,10 @@ export type Intent =
   | UnknownIntent
   | ScheduleIntent
   | ViewSchedulesIntent
-  | CancelScheduleIntent;
+  | CancelScheduleIntent
+  | SaveContactIntent
+  | ListContactsIntent
+  | DeleteContactIntent;
 
 export interface WalletContext {
   publicKey?: string;
@@ -118,6 +139,12 @@ export function isIntent(value: unknown): value is Intent {
         value.description === undefined ||
         typeof value.description === "string"
       );
+    case "save_contact":
+      return typeof value.name === "string" && typeof value.address === "string";
+    case "list_contacts":
+      return true;
+    case "delete_contact":
+      return typeof value.name === "string";
     default:
       return false;
   }
