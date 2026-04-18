@@ -32,15 +32,17 @@ import {
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
 import type { JupiterQuote } from "@/lib/jupiterClient";
-import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent, MultiStepIntent, SetPortfolioIntent, RebalanceSwap, DCAIntent, CancelDCAIntent, PriceAlertIntent, DCAOrder, PriceAlert } from "@/types/intent";
+import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent, MultiStepIntent, SetPortfolioIntent, RebalanceSwap, ExplainTxIntent, DCAIntent, CancelDCAIntent, PriceAlertIntent, DCAOrder, PriceAlert } from "@/types/intent";
 import { PortfolioManagerCard } from "@/components/PortfolioManagerCard";
+import { ExplanationCard, type ExplanationCardProps } from "@/components/ExplanationCard";
+import { InsightsCard, type InsightsPayload } from "@/components/InsightsCard";
 import { usePortfolioManager } from "@/hooks/usePortfolioManager";
 import { MultiStepPreview, type StepRunStatus } from "@/components/MultiStepPreview";
 import type { ScheduledPayment } from "@/types/schedule";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "ai";
-type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts" | "portfolio_manager" | "dca_manager";
+type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts" | "portfolio_manager" | "explanation" | "insights" | "dca_manager";
 
 type ReceiptPayload =
   | {
@@ -68,6 +70,8 @@ interface Message {
   component?: MessageComponent;
   receipt?: ReceiptPayload;
   historyLimit?: number;
+  explanation?: ExplanationCardProps;
+  insights?: InsightsPayload;
   ts: number;
 }
 
@@ -129,6 +133,14 @@ function componentSummary(component: MessageComponent, msg: Message): string {
       return "[AI showed address book contacts]";
     case "portfolio_manager":
       return "[AI showed portfolio manager with allocation targets]";
+    case "explanation":
+      return msg.explanation
+        ? `[AI explained tx: ${msg.explanation.summary}]`
+        : "[AI explained a transaction]";
+    case "insights":
+      return msg.insights
+        ? `[AI showed spending insights: ${msg.insights.txCount} txs, ${msg.insights.totalSolOut.toFixed(4)} SOL out]`
+        : "[AI showed spending insights]";
     case "dca_manager":
       return "[AI showed DCA orders and price alerts]";
   }
@@ -156,7 +168,14 @@ function rowsToMessages(rows: ChatMessageRow[]): Message[] {
     if (row.component) msg.component = row.component as MessageComponent;
     if (row.receipt_json) {
       try {
-        msg.receipt = JSON.parse(row.receipt_json) as ReceiptPayload;
+        const parsed = JSON.parse(row.receipt_json);
+        if (row.component === "explanation") {
+          msg.explanation = parsed as ExplanationCardProps;
+        } else if (row.component === "insights") {
+          msg.insights = parsed as InsightsPayload;
+        } else {
+          msg.receipt = parsed as ReceiptPayload;
+        }
       } catch {
         // ignore malformed
       }
@@ -768,13 +787,14 @@ export function ChatInterface() {
       }
     }
 
+    const cardPayload = msg.receipt ?? msg.explanation ?? msg.insights ?? null;
     const row: Omit<ChatMessageRow, never> = {
       id: msg.id,
       session_id: sessionId,
       role: msg.role,
       text: msg.text ?? null,
       component: msg.component ?? null,
-      receipt_json: msg.receipt ? JSON.stringify(msg.receipt) : null,
+      receipt_json: cardPayload ? JSON.stringify(cardPayload) : null,
       history_limit: msg.historyLimit ?? null,
       ts: msg.ts,
     };
@@ -1108,6 +1128,77 @@ export function ChatInterface() {
           ts: Date.now(),
         });
         await executeMultiStep(msIntent);
+      } else if (data.data.action === "explain_tx") {
+        const intent = data.data as ExplainTxIntent;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet so I know which one to frame this from.", ts: Date.now() });
+        } else {
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: `Looking up ${shortAddress(intent.signature, 8, 8)}…`,
+            ts: Date.now(),
+          });
+          const res2 = await fetch("/api/explain-tx", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ signature: intent.signature, walletPubkey: publicKey.toBase58() }),
+          });
+          const json2 = (await res2.json()) as
+            | { success: true; data: ExplanationCardProps }
+            | { success: false; error?: string };
+          if (json2.success) {
+            appendMessage({
+              id: crypto.randomUUID(),
+              role: "ai",
+              component: "explanation",
+              explanation: json2.data,
+              ts: Date.now(),
+            });
+          } else {
+            appendMessage({
+              id: crypto.randomUUID(),
+              role: "ai",
+              text: json2.error ?? "Couldn't explain that transaction.",
+              ts: Date.now(),
+            });
+          }
+        }
+      } else if (data.data.action === "spending_insights") {
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet so I can analyze its activity.", ts: Date.now() });
+        } else {
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: "Analyzing your last 20 transactions…",
+            ts: Date.now(),
+          });
+          const res2 = await fetch("/api/spending-insights", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ walletPubkey: publicKey.toBase58() }),
+          });
+          const json2 = (await res2.json()) as
+            | { success: true; data: InsightsPayload }
+            | { success: false; error?: string };
+          if (json2.success) {
+            appendMessage({
+              id: crypto.randomUUID(),
+              role: "ai",
+              component: "insights",
+              insights: json2.data,
+              ts: Date.now(),
+            });
+          } else {
+            appendMessage({
+              id: crypto.randomUUID(),
+              role: "ai",
+              text: json2.error ?? "Couldn't pull spending insights right now.",
+              ts: Date.now(),
+            });
+          }
+        }
       } else {
         appendMessage(intentToMessage(data.data));
       }
@@ -1868,6 +1959,14 @@ function MessageBubble({
             onToggleActive={onToggleActive}
           />
         </div>
+      ) : message.component === "explanation" && message.explanation ? (
+        <div className="max-w-[90%] flex-1">
+          <ExplanationCard {...message.explanation} />
+        </div>
+      ) : message.component === "insights" && message.insights ? (
+        <div className="max-w-[90%] flex-1">
+          <InsightsCard data={message.insights} />
+        </div>
       ) : message.component === "dca_manager" ? (
         <div className="max-w-[90%] flex-1">
           <DCACard
@@ -1976,6 +2075,10 @@ function intentToMessage(intent: Intent): Message {
       return { ...base, component: "portfolio_manager" as const };
     case "set_drift_threshold":
       return { ...base, text: `Drift threshold updated to ${intent.threshold}%.` };
+    case "explain_tx":
+      return { ...base, text: `Looking up transaction ${shortAddress(intent.signature, 8, 8)}…` };
+    case "spending_insights":
+      return { ...base, text: "Analyzing your recent transactions…" };
     case "dca":
       return { ...base, text: `Setting up DCA: $${intent.amountUsd} ${intent.inputToken} → ${intent.outputToken} ${intent.interval}.` };
     case "view_dca":
