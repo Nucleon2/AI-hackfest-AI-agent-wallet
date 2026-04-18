@@ -105,3 +105,7 @@ export function deserializeSwapTx(base64: string): VersionedTransaction {
       : Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   return VersionedTransaction.deserialize(buf);
 }
+
+export function deserializeStakeTx(base64: string): VersionedTransaction {
+  return deserializeSwapTx(base64);
+}
