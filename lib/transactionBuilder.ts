@@ -3,6 +3,7 @@ import {
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
+  Transaction,
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
@@ -106,6 +107,13 @@ export function deserializeSwapTx(base64: string): VersionedTransaction {
   return VersionedTransaction.deserialize(buf);
 }
 
-export function deserializeStakeTx(base64: string): VersionedTransaction {
-  return deserializeSwapTx(base64);
+// Marinade's SDK emits legacy Transactions that reference the program's
+// address lookup table. We serialize and transport them unchanged so the
+// LUT references survive the round-trip to the wallet adapter.
+export function deserializeLegacyTx(base64: string): Transaction {
+  const buf =
+    typeof Buffer !== "undefined"
+      ? Buffer.from(base64, "base64")
+      : Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return Transaction.from(buf);
 }

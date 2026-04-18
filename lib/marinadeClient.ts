@@ -1,9 +1,7 @@
 import {
   Connection,
-  LAMPORTS_PER_SOL,
   PublicKey,
-  TransactionMessage,
-  VersionedTransaction,
+  Transaction,
 } from "@solana/web3.js";
 import {
   BN,
@@ -11,8 +9,12 @@ import {
   MarinadeConfig,
 } from "@marinade.finance/marinade-ts-sdk";
 
+// mSOL uses 9 decimals — same base-unit scale as SOL lamports — so
+// LAMPORTS_PER_SOL works for both SOL→lamports and mSOL→raw conversions.
+const MARINADE_BASE_UNITS = 1_000_000_000;
+
 export interface BuiltMarinadeTx {
-  transaction: VersionedTransaction;
+  transaction: Transaction;
   blockhashInfo: { blockhash: string; lastValidBlockHeight: number };
   associatedMSolTokenAccount: string;
 }
@@ -22,23 +24,23 @@ function makeMarinade(connection: Connection, owner: PublicKey): Marinade {
   return new Marinade(config);
 }
 
-async function toVersionedTx(
+// Marinade's SDK returns a legacy Transaction whose instructions reference
+// the Marinade program's address lookup table. Repacking the instructions
+// into a v0 message without the LUT produced transactions that failed
+// simulation, so we preserve the original legacy Transaction and attach a
+// fresh blockhash + fee payer — the wallet adapter's sendTransaction
+// accepts legacy Transactions directly.
+async function finalizeTx(
   connection: Connection,
   payer: PublicKey,
-  legacyTx: { instructions: { programId: PublicKey; keys: unknown; data: Buffer }[] }
-): Promise<{ transaction: VersionedTransaction; blockhashInfo: { blockhash: string; lastValidBlockHeight: number } }> {
+  tx: Transaction
+): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(
     "confirmed"
   );
-  const message = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash: blockhash,
-    instructions: legacyTx.instructions as never,
-  }).compileToV0Message();
-  return {
-    transaction: new VersionedTransaction(message),
-    blockhashInfo: { blockhash, lastValidBlockHeight },
-  };
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = payer;
+  return { blockhash, lastValidBlockHeight };
 }
 
 export async function buildMarinadeDepositTx(
@@ -49,18 +51,14 @@ export async function buildMarinadeDepositTx(
   if (!Number.isFinite(amountSol) || amountSol <= 0) {
     throw new Error("Amount must be a positive number.");
   }
-  const lamports = Math.round(amountSol * LAMPORTS_PER_SOL);
+  const lamports = Math.round(amountSol * MARINADE_BASE_UNITS);
   const marinade = makeMarinade(connection, owner);
   const { transaction, associatedMSolTokenAccountAddress } = await marinade.deposit(
     new BN(lamports)
   );
-  const { transaction: v0, blockhashInfo } = await toVersionedTx(
-    connection,
-    owner,
-    transaction
-  );
+  const blockhashInfo = await finalizeTx(connection, owner, transaction);
   return {
-    transaction: v0,
+    transaction,
     blockhashInfo,
     associatedMSolTokenAccount: associatedMSolTokenAccountAddress.toBase58(),
   };
@@ -74,20 +72,34 @@ export async function buildMarinadeLiquidUnstakeTx(
   if (!Number.isFinite(amountMsol) || amountMsol <= 0) {
     throw new Error("Amount must be a positive number.");
   }
-  const lamports = Math.round(amountMsol * LAMPORTS_PER_SOL);
+  const lamports = Math.round(amountMsol * MARINADE_BASE_UNITS);
   const marinade = makeMarinade(connection, owner);
   const { transaction, associatedMSolTokenAccountAddress } =
     await marinade.liquidUnstake(new BN(lamports));
-  const { transaction: v0, blockhashInfo } = await toVersionedTx(
-    connection,
-    owner,
-    transaction
-  );
+  const blockhashInfo = await finalizeTx(connection, owner, transaction);
   return {
-    transaction: v0,
+    transaction,
     blockhashInfo,
     associatedMSolTokenAccount: associatedMSolTokenAccountAddress.toBase58(),
   };
+}
+
+// Query the real liquid-unstake fee (basis points) for a specific unstake
+// amount. The fee scales with pool utilization — hardcoded 30bp was
+// inaccurate during high-drain periods.
+export async function fetchUnstakeFeePct(
+  connection: Connection,
+  owner: PublicKey,
+  amountMsol: number
+): Promise<number> {
+  const marinade = makeMarinade(connection, owner);
+  const state = await marinade.getMarinadeState();
+  const lamports = Math.round(amountMsol * MARINADE_BASE_UNITS);
+  // Convert mSOL lamports → target SOL lamports using the price (the SDK's
+  // unstakeNowFeeBp expects lamports-to-obtain, i.e. the output SOL side).
+  const solLamports = Math.round(lamports * state.mSolPrice);
+  const feeBp = await state.unstakeNowFeeBp(new BN(solLamports));
+  return feeBp / 100; // basis points → percent
 }
 
 export async function fetchMsolPrice(

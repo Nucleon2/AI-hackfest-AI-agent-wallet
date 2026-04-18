@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, type VersionedTransaction } from "@solana/web3.js";
+import { PublicKey, type Transaction, type VersionedTransaction } from "@solana/web3.js";
 import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { PortfolioCard } from "@/components/PortfolioCard";
@@ -26,7 +26,7 @@ import { useChatSessionStore } from "@/lib/stores/chatSessionStore";
 import type { ChatMessageRow } from "@/lib/db";
 import {
   buildSolTransferTx,
-  deserializeStakeTx,
+  deserializeLegacyTx,
   deserializeSwapTx,
   shortAddress,
   validateRecipient,
@@ -1231,7 +1231,7 @@ export function ChatInterface() {
 
     setStakePreviewStatus("signing");
 
-    let transaction: VersionedTransaction;
+    let transaction: Transaction;
     let lastValidBlockHeight: number;
     let finalDisplay: StakeQuoteDisplay;
     try {
@@ -1258,7 +1258,7 @@ export function ChatInterface() {
       if (!json.success) {
         throw new Error(json.error ?? "Failed to build staking transaction.");
       }
-      transaction = deserializeStakeTx(json.data.stakeTransaction);
+      transaction = deserializeLegacyTx(json.data.stakeTransaction);
       lastValidBlockHeight = json.data.lastValidBlockHeight;
       finalDisplay = json.data.display;
     } catch (err) {
@@ -1281,7 +1281,8 @@ export function ChatInterface() {
     }
 
     try {
-      const blockhash = transaction.message.recentBlockhash;
+      const blockhash = transaction.recentBlockhash;
+      if (!blockhash) throw new Error("Missing blockhash on signed transaction.");
       const result = await connection.confirmTransaction(
         { signature, blockhash, lastValidBlockHeight },
         "confirmed"
