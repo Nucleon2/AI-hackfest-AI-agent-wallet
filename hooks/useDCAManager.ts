@@ -75,9 +75,16 @@ export function useDCAManager(
       const json = (await res.json()) as
         | { success: true; data: DCAOrder[] }
         | { success: false };
-      if (json.success && json.data.length > 0) {
-        setDueOrder(json.data[0]);
-      }
+      if (!json.success) return;
+      // Clear stale due state when the server reports nothing due, or when the
+      // due id no longer matches — prevents a cancelled order from triggering
+      // auto-execute on the next tick.
+      setDueOrder((prev) => {
+        const next = json.data[0] ?? null;
+        if (!next) return null;
+        if (prev && prev.id === next.id) return prev;
+        return next;
+      });
     } catch {
       // ignore polling errors
     }
@@ -90,11 +97,16 @@ export function useDCAManager(
       const json = (await res.json()) as
         | { success: true; data: PriceAlert[] }
         | { success: false };
-      if (!json.success || json.data.length === 0) return;
+      if (!json.success) return;
+      // Keep local alerts state fresh from the fetch itself — no need for a
+      // follow-up refresh() unless an alert actually fires.
+      setAlerts(json.data);
+      if (json.data.length === 0) return;
 
       const uniqueTokens = Array.from(new Set(json.data.map((a) => a.token)));
       const prices = await fetchPrices(uniqueTokens);
 
+      let anyTriggered = false;
       for (const alert of json.data) {
         const price = prices[alert.token];
         if (!price || price <= 0) continue;
@@ -110,10 +122,11 @@ export function useDCAManager(
         });
         const markJson = (await markRes.json()) as { success: boolean };
         if (markJson.success) {
+          anyTriggered = true;
           onAlertRef.current({ alert, currentPrice: price });
         }
       }
-      await refresh();
+      if (anyTriggered) await refresh();
     } catch {
       // ignore
     }
