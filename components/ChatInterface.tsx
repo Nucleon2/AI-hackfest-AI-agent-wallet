@@ -81,10 +81,12 @@ const SUGGESTIONS = [
 ];
 
 interface ResolvedStep {
-  kind: "swap" | "send";
+  kind: "swap" | "send" | "display";
   swapIntent?: SwapIntent;
   sendIntent?: SendIntent;
   chainAmount?: boolean;
+  displayKind?: "history" | "balance";
+  historyLimit?: number;
 }
 
 interface PreparedTx {
@@ -911,8 +913,27 @@ export function ChatInterface() {
     updateStepStatus(index, "building");
     const step = resolvedStepsRef.current[index];
     if (!step) return;
-    if (step.kind === "swap") setPendingSwap(step.swapIntent!);
-    else setPendingSend(step.sendIntent!);
+    if (step.kind === "swap") {
+      setPendingSwap(step.swapIntent!);
+    } else if (step.kind === "send") {
+      setPendingSend(step.sendIntent!);
+    } else {
+      // Display step — show result immediately, no confirmation needed
+      if (step.displayKind === "history") {
+        appendMessage({ id: crypto.randomUUID(), role: "ai", component: "history", historyLimit: step.historyLimit ?? 5, ts: Date.now() });
+      } else {
+        appendMessage({ id: crypto.randomUUID(), role: "ai", component: "portfolio", ts: Date.now() });
+      }
+      setTimeout(() => {
+        updateStepStatus(index, "done");
+        const nextIndex = index + 1;
+        if (nextIndex >= resolvedStepsRef.current.length) {
+          setPendingMultiStep(null);
+          return;
+        }
+        startStep(nextIndex);
+      }, 0);
+    }
   }
 
   async function handleMultiStepConfirmCurrent() {
@@ -1020,6 +1041,10 @@ export function ChatInterface() {
           },
           chainAmount: step.amount === null,
         });
+      } else if (step.type === "history") {
+        resolved.push({ kind: "display", displayKind: "history", historyLimit: step.limit ?? 5 });
+      } else if (step.type === "balance") {
+        resolved.push({ kind: "display", displayKind: "balance" });
       } else {
         resolved.push({
           kind: "swap",

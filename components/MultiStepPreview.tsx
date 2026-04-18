@@ -83,6 +83,12 @@ function stepSummary(step: MultiStepStep): string {
   if (step.type === "swap") {
     return `Swap ${step.amount} ${step.fromToken} → ${step.toToken}`;
   }
+  if (step.type === "history") {
+    return `Show last ${step.limit ?? 5} transactions`;
+  }
+  if (step.type === "balance") {
+    return "Show wallet balance";
+  }
   const amt = step.amount !== null ? String(step.amount) : "(swap output)";
   const recip = step.recipient
     ? step.recipient.length > 20
@@ -241,7 +247,9 @@ export function MultiStepPreview({
                       </span>
                       <span className={cn(
                         "text-[10px] uppercase tracking-wider",
-                        step.type === "swap" ? "text-violet-400/70" : "text-indigo-400/70"
+                        step.type === "swap" ? "text-violet-400/70" :
+                        step.type === "history" || step.type === "balance" ? "text-sky-400/70" :
+                        "text-indigo-400/70"
                       )}>
                         {step.type}
                       </span>

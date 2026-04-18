@@ -68,15 +68,18 @@ Step types inside multi_step:
   - { "type": "send", "amount": null, "token": "SOL", "recipient": "<address or contact name>", "memo": null }
     Set amount to null when the send should use the received amount from the previous swap step.
     Set amount to a concrete number when the user specified a fixed amount for the send.
+  - { "type": "history", "limit": 5 }
+  - { "type": "balance" }
 
 Rules for multi_step:
   - Only return multi_step when there are clearly 2+ sequential actions.
   - Generate a short English "description" field summarising the whole chain (e.g. "Swap 50 USDC to SOL then send to Ahmad").
-  - Maximum supported steps: 3.
+  - Maximum supported steps: 4.
   - If any step has an unclear recipient or amount that cannot be chained, return action "unknown" with a clarification.
   - If recipient looks like a contact name (not a base58 address), include it as-is — the frontend will resolve it.
-  - multi_step ONLY supports steps of type "swap" or "send". Never include "history", "balance", or any read-only query as a step.
-  - If the user chains a read-only query (history, balance) with a transaction, return action "unknown" with a clarification asking them to ask separately.
+  - multi_step supports steps of type "swap", "send", "history", or "balance".
+  - "history" and "balance" are display steps — they execute instantly without a confirmation prompt.
+  - Use multi_step whenever the user asks to do 2+ things in one message, including mixing display steps with transactions.
 
 Examples:
   "Swap 50 USDC to SOL then send it to Ahmad"
@@ -196,7 +199,7 @@ export async function POST(req: NextRequest) {
     (parsed as Record<string, unknown>).action === "multi_step"
   ) {
     const steps = (parsed as Record<string, unknown>).steps;
-    const validStepTypes = ["swap", "send"];
+    const validStepTypes = ["swap", "send", "history", "balance"];
     const allValid =
       Array.isArray(steps) &&
       steps.every(

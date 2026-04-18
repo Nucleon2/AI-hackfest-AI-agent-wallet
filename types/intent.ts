@@ -94,7 +94,17 @@ export interface MultiStepSendStep {
   memo?: string;
 }
 
-export type MultiStepStep = MultiStepSwapStep | MultiStepSendStep;
+export interface MultiStepHistoryStep {
+  type: "history";
+  limit?: number;
+}
+
+export interface MultiStepBalanceStep {
+  type: "balance";
+  token?: string;
+}
+
+export type MultiStepStep = MultiStepSwapStep | MultiStepSendStep | MultiStepHistoryStep | MultiStepBalanceStep;
 
 export interface MultiStepIntent {
   action: "multi_step";
