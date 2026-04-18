@@ -57,7 +57,7 @@ export function useVoiceInput({
   const [interimTranscript, setInterimTranscript] = useState("");
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const finalReceivedRef = useRef(false);
+  const errorTimeoutRef = useRef<number | null>(null);
   const onTranscriptRef = useRef(onTranscript);
   const onErrorRef = useRef(onError);
 
@@ -72,6 +72,10 @@ export function useVoiceInput({
 
   useEffect(() => {
     return () => {
+      if (errorTimeoutRef.current !== null) {
+        window.clearTimeout(errorTimeoutRef.current);
+        errorTimeoutRef.current = null;
+      }
       const recognition = recognitionRef.current;
       if (!recognition) return;
       recognition.onresult = null;
@@ -87,8 +91,17 @@ export function useVoiceInput({
     };
   }, []);
 
+  useEffect(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.lang = lang;
+    }
+  }, [lang]);
+
   const ensureRecognition = useCallback((): SpeechRecognitionInstance | null => {
-    if (recognitionRef.current) return recognitionRef.current;
+    if (recognitionRef.current) {
+      recognitionRef.current.lang = lang;
+      return recognitionRef.current;
+    }
     const Ctor = getCtor();
     if (!Ctor) return null;
 
@@ -105,7 +118,6 @@ export function useVoiceInput({
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
-      finalReceivedRef.current = false;
       setInterimTranscript("");
       setState("listening");
     };
@@ -121,11 +133,11 @@ export function useVoiceInput({
       }
 
       if (final) {
-        finalReceivedRef.current = true;
         setState("processing");
         setInterimTranscript("");
         onTranscriptRef.current(final);
-        setState("idle");
+        // onend will flip us back to idle on the next tick so the
+        // processing state actually gets a render pass.
       } else {
         setInterimTranscript(interim);
       }
@@ -135,14 +147,18 @@ export function useVoiceInput({
       setState("error");
       setInterimTranscript("");
       onErrorRef.current?.(event.error);
-      window.setTimeout(() => setState("idle"), 1500);
+      if (errorTimeoutRef.current !== null) {
+        window.clearTimeout(errorTimeoutRef.current);
+      }
+      errorTimeoutRef.current = window.setTimeout(() => {
+        errorTimeoutRef.current = null;
+        setState("idle");
+      }, 1500);
     };
 
     recognition.onend = () => {
-      if (!finalReceivedRef.current) {
-        setInterimTranscript("");
-        setState((prev) => (prev === "error" ? prev : "idle"));
-      }
+      setInterimTranscript("");
+      setState((prev) => (prev === "error" ? prev : "idle"));
     };
 
     recognitionRef.current = recognition;
@@ -152,6 +168,10 @@ export function useVoiceInput({
   const start = useCallback(() => {
     const recognition = ensureRecognition();
     if (!recognition) return;
+    if (errorTimeoutRef.current !== null) {
+      window.clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
     try {
       recognition.start();
     } catch {
