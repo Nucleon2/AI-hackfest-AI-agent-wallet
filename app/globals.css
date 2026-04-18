@@ -81,3 +81,17 @@ body {
 .motion-safe\:animate-shine {
   animation: shine var(--duration) infinite linear;
 }
+
+@keyframes ripple {
+  0%, 100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+.animate-ripple {
+  animation: ripple 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  animation-delay: calc(var(--i, 0) * 0.5s);
+}

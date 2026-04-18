@@ -1,31 +1,61 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { WalletConnectButton } from "@/components/WalletConnectButton";
-import { PortfolioCard } from "@/components/PortfolioCard";
 import { ChatInterface } from "@/components/ChatInterface";
+import { Sidebar } from "@/components/Sidebar";
+import { AnimatedGridPattern } from "@/components/ui/animated-grid-pattern";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
-import { ShineBorder } from "@/components/ui/shine-border";
-
-const Scene = dynamic(
-  () => import("@/components/three/Scene").then((m) => m.Scene),
-  { ssr: false }
-);
 
 export default function Home() {
   return (
-    <>
-      <Scene />
+    <div className="relative flex h-screen flex-col overflow-hidden bg-[#05060d]">
+      {/* Background layer */}
+      <div className="pointer-events-none fixed inset-0 z-0">
+        {/* Radial glow */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(99,102,241,0.2) 0%, transparent 65%)",
+          }}
+        />
+        {/* Secondary glow bottom-right */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(ellipse 50% 40% at 85% 90%, rgba(167,139,250,0.08) 0%, transparent 60%)",
+          }}
+        />
+        <AnimatedGridPattern
+          width={50}
+          height={50}
+          numSquares={30}
+          maxOpacity={0.04}
+          duration={6}
+          className="fill-indigo-400/10 stroke-indigo-400/10"
+        />
+      </div>
 
-      <main className="relative z-10 flex h-screen flex-col overflow-hidden">
+      {/* App shell */}
+      <div className="relative z-10 flex h-full flex-col">
         {/* Header */}
-        <header className="flex flex-shrink-0 items-center justify-between border-b border-white/8 bg-black/20 px-6 py-3 backdrop-blur-md">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-500/20 border border-indigo-500/30">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="9" stroke="#818cf8" strokeWidth="1.5" />
-                <path d="M9 12l2 2 4-4" stroke="#818cf8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+        <header className="flex flex-shrink-0 items-center justify-between border-b border-white/[0.06] bg-black/30 px-6 py-3.5 backdrop-blur-xl">
+          <div className="flex items-center gap-3">
+            {/* Logo mark */}
+            <div className="relative flex h-8 w-8 items-center justify-center">
+              <div className="absolute inset-0 rounded-lg bg-indigo-500/20 blur-sm" />
+              <div className="relative flex h-8 w-8 items-center justify-center rounded-lg border border-indigo-500/30 bg-indigo-500/10">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M12 2L20.5 7V17L12 22L3.5 17V7L12 2Z"
+                    stroke="#818cf8"
+                    strokeWidth="1.5"
+                    strokeLinejoin="round"
+                  />
+                  <circle cx="12" cy="12" r="2" fill="#818cf8" />
+                </svg>
+              </div>
             </div>
             <AnimatedShinyText
               shimmerWidth={120}
@@ -34,29 +64,30 @@ export default function Home() {
               AI Agent Wallet
             </AnimatedShinyText>
           </div>
+
+          {/* Center — network pill */}
+          <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[10px] font-medium text-white/40 tracking-wider uppercase">
+              Solana Devnet
+            </span>
+          </div>
+
           <WalletConnectButton />
         </header>
 
-        {/* Content */}
-        <div className="flex flex-1 min-h-0 items-stretch justify-center px-4 py-4">
-          <div className="flex w-full max-w-2xl flex-col gap-4">
-            {/* Portfolio card */}
-            <div className="flex-shrink-0">
-              <PortfolioCard />
-            </div>
+        {/* Body: sidebar + chat */}
+        <div className="flex flex-1 min-h-0">
+          <Sidebar />
 
-            {/* Chat panel */}
-            <div className="relative flex flex-1 min-h-0 flex-col rounded-2xl border border-white/8 bg-black/30 backdrop-blur-xl p-4 overflow-hidden">
-              <ShineBorder
-                shineColor={["#6366f1", "#a78bfa", "#38bdf8"]}
-                borderWidth={1}
-                duration={10}
-              />
-              <ChatInterface />
-            </div>
-          </div>
+          {/* Main chat panel */}
+          <main className="relative flex flex-1 flex-col min-w-0 min-h-0">
+            {/* Panel border glow */}
+            <div className="pointer-events-none absolute inset-y-0 left-0 w-px bg-gradient-to-b from-transparent via-indigo-500/20 to-transparent" />
+            <ChatInterface />
+          </main>
         </div>
-      </main>
-    </>
+      </div>
+    </div>
   );
 }
