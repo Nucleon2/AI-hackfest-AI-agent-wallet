@@ -7,11 +7,13 @@ import { useDCAStore } from "@/lib/stores/dcaStore";
 export interface TriggeredAlert {
   alert: PriceAlert;
   currentPrice: number;
+  needsSwap: boolean;
 }
 
 export interface UseDCAManagerReturn {
   orders: DCAOrder[];
   alerts: PriceAlert[];
+  alertPrices: Record<string, number>;
   dueOrder: DCAOrder | null;
   loading: boolean;
   refresh: () => Promise<void>;
@@ -37,6 +39,7 @@ export function useDCAManager(
 ): UseDCAManagerReturn {
   const [orders, setOrders] = useState<DCAOrder[]>([]);
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
+  const [alertPrices, setAlertPrices] = useState<Record<string, number>>({});
   const [dueOrder, setDueOrder] = useState<DCAOrder | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -110,6 +113,7 @@ export function useDCAManager(
 
       const uniqueTokens = Array.from(new Set(json.data.map((a) => a.token)));
       const prices = await fetchPrices(uniqueTokens);
+      setAlertPrices(prices);
 
       let anyTriggered = false;
       for (const alert of json.data) {
@@ -128,7 +132,11 @@ export function useDCAManager(
         const markJson = (await markRes.json()) as { success: boolean };
         if (markJson.success) {
           anyTriggered = true;
-          onAlertRef.current({ alert, currentPrice: price });
+          onAlertRef.current({
+            alert,
+            currentPrice: price,
+            needsSwap: alert.action_type === "swap",
+          });
         }
       }
       if (anyTriggered) await refresh();
@@ -198,6 +206,7 @@ export function useDCAManager(
   return {
     orders,
     alerts,
+    alertPrices,
     dueOrder,
     loading,
     refresh,
