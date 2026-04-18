@@ -36,6 +36,9 @@ import { usePortfolioManager } from "@/hooks/usePortfolioManager";
 import { MultiStepPreview, type StepRunStatus } from "@/components/MultiStepPreview";
 import type { ScheduledPayment } from "@/types/schedule";
 import { cn } from "@/lib/utils";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { VoiceInputButton } from "@/components/VoiceInputButton";
+import { VoiceWaveform } from "@/components/VoiceWaveform";
 
 type Role = "user" | "ai";
 type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts" | "portfolio_manager";
@@ -172,6 +175,16 @@ export function ChatInterface() {
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const voice = useVoiceInput({
+    onTranscript: (text) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      setInput(trimmed);
+      void send(trimmed);
+    },
+    onError: (err) => console.warn("[voice]", err),
+  });
 
   const [pendingSend, setPendingSend] = useState<SendIntent | null>(null);
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus>("building");
@@ -1431,6 +1444,7 @@ export function ChatInterface() {
       {/* Input row */}
       <div className="relative flex-shrink-0 px-4 pb-4 pt-2">
         <div className="relative flex items-end gap-2 rounded-2xl border border-white/10 bg-black/50 p-2.5 backdrop-blur-2xl">
+          <VoiceWaveform visible={voice.state === "listening"} />
           <textarea
             ref={inputRef}
             rows={1}
@@ -1448,6 +1462,12 @@ export function ChatInterface() {
             }
             disabled={!connected || busy || !!pendingMultiStep}
             className="flex-1 resize-none bg-transparent text-sm text-white/90 placeholder:text-white/25 outline-none py-1.5 px-2 min-h-[36px] max-h-[120px] disabled:opacity-40"
+          />
+          <VoiceInputButton
+            state={voice.state}
+            isSupported={voice.isSupported}
+            onClick={voice.toggle}
+            disabled={!connected || busy || !!pendingMultiStep}
           />
           <ShimmerButton
             onClick={() => send(input)}
