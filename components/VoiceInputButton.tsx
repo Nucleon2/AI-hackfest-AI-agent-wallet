@@ -36,7 +36,7 @@ export function VoiceInputButton({
       title={title}
       aria-label={title}
       aria-pressed={listening}
-      whileTap={{ scale: 0.92 }}
+      whileTap={{ scale: buttonDisabled ? 1 : 0.92 }}
       whileHover={{ scale: buttonDisabled ? 1 : 1.04 }}
       className={cn(
         "relative shrink-0 flex h-9 w-9 items-center justify-center rounded-xl border text-white/80 transition-colors",

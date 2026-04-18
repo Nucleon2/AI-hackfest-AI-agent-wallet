@@ -42,6 +42,11 @@ interface UseVoiceInputOpts {
   lang?: string;
 }
 
+function getCtor(): SpeechRecognitionCtor | null {
+  if (typeof window === "undefined") return null;
+  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+}
+
 export function useVoiceInput({
   onTranscript,
   onError,
@@ -62,11 +67,38 @@ export function useVoiceInput({
   }, [onTranscript, onError]);
 
   useEffect(() => {
-    const Ctor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    if (!Ctor) return;
+    setIsSupported(!!getCtor());
+  }, []);
 
-    setIsSupported(true);
-    const recognition = new Ctor();
+  useEffect(() => {
+    return () => {
+      const recognition = recognitionRef.current;
+      if (!recognition) return;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      recognition.onstart = null;
+      try {
+        recognition.abort();
+      } catch {
+        // already stopped
+      }
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  const ensureRecognition = useCallback((): SpeechRecognitionInstance | null => {
+    if (recognitionRef.current) return recognitionRef.current;
+    const Ctor = getCtor();
+    if (!Ctor) return null;
+
+    let recognition: SpeechRecognitionInstance;
+    try {
+      recognition = new Ctor();
+    } catch {
+      return null;
+    }
+
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = lang;
@@ -114,30 +146,18 @@ export function useVoiceInput({
     };
 
     recognitionRef.current = recognition;
-
-    return () => {
-      recognition.onresult = null;
-      recognition.onerror = null;
-      recognition.onend = null;
-      recognition.onstart = null;
-      try {
-        recognition.abort();
-      } catch {
-        // ignore — abort can throw if already stopped
-      }
-      recognitionRef.current = null;
-    };
+    return recognition;
   }, [lang]);
 
   const start = useCallback(() => {
-    const recognition = recognitionRef.current;
+    const recognition = ensureRecognition();
     if (!recognition) return;
     try {
       recognition.start();
     } catch {
-      // start() throws if already started — safe to ignore
+      // already started — safe to ignore
     }
-  }, []);
+  }, [ensureRecognition]);
 
   const stop = useCallback(() => {
     const recognition = recognitionRef.current;
