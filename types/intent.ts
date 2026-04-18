@@ -9,7 +9,8 @@ export type IntentAction =
   | "cancel_schedule"
   | "save_contact"
   | "list_contacts"
-  | "delete_contact";
+  | "delete_contact"
+  | "multi_step";
 
 export interface SendIntent {
   action: "send";
@@ -77,6 +78,30 @@ export interface DeleteContactIntent {
   name: string;
 }
 
+export interface MultiStepSwapStep {
+  type: "swap";
+  fromToken: string;
+  toToken: string;
+  amount: number;
+  slippageBps?: number;
+}
+
+export interface MultiStepSendStep {
+  type: "send";
+  amount: number | null; // null = use previous step's swap output
+  token: string;
+  recipient: string;
+  memo?: string;
+}
+
+export type MultiStepStep = MultiStepSwapStep | MultiStepSendStep;
+
+export interface MultiStepIntent {
+  action: "multi_step";
+  steps: MultiStepStep[];
+  description: string;
+}
+
 export type Intent =
   | SendIntent
   | SwapIntent
@@ -88,7 +113,8 @@ export type Intent =
   | CancelScheduleIntent
   | SaveContactIntent
   | ListContactsIntent
-  | DeleteContactIntent;
+  | DeleteContactIntent
+  | MultiStepIntent;
 
 export interface WalletContext {
   publicKey?: string;
@@ -145,6 +171,12 @@ export function isIntent(value: unknown): value is Intent {
       return true;
     case "delete_contact":
       return typeof value.name === "string";
+    case "multi_step":
+      return (
+        Array.isArray(value.steps) &&
+        (value.steps as unknown[]).length >= 2 &&
+        typeof value.description === "string"
+      );
     default:
       return false;
   }
