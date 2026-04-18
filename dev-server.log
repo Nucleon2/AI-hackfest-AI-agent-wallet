@@ -1,0 +1,51 @@
+
+> ai-agent-wallet@0.1.0 dev
+> next dev
+
+ ⚠ Port 3000 is in use, trying 3001 instead.
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3001
+  - Environments: .env.local
+
+ ✓ Starting...
+ ⚠ Invalid next.config.mjs options detected: 
+ ⚠     Unrecognized key(s) in object: 'serverExternalPackages'
+ ⚠ See more info here: https://nextjs.org/docs/messages/invalid-next-config
+ ✓ Ready in 2.7s
+ ✓ Compiled /api/portfolio/config in 250ms (60 modules)
+ GET /api/portfolio/config?wallet=11111111111111111111111111111111 200 in 382ms
+ ○ Compiling /api/portfolio/rebalance ...
+ ✓ Compiled /api/portfolio/rebalance in 622ms (245 modules)
+ POST /api/portfolio/rebalance 404 in 764ms
+ POST /api/portfolio/config 200 in 11ms
+ ○ Compiling / ...
+ ✓ Compiled / in 4.5s (2267 modules)
+ GET / 200 in 4704ms
+ GET / 200 in 30ms
+ ✓ Compiled in 321ms (918 modules)
+ GET / 200 in 36ms
+ GET /api/portfolio/config?wallet=11111111111111111111111111111111 200 in 22ms
+ POST /api/portfolio/config 200 in 8ms
+ GET /api/portfolio/config?wallet=So11111111111111111111111111111111111111112 200 in 7ms
+ PATCH /api/portfolio/config 200 in 7ms
+ POST /api/portfolio/config 200 in 8ms
+ POST /api/portfolio/rebalance 502 in 97ms
+ GET / 200 in 75ms
+ POST /api/portfolio/config 200 in 8ms
+ POST /api/portfolio/rebalance 502 in 58ms
+ ✓ Compiled in 29ms
+ ✓ Compiled /api/portfolio/rebalance in 117ms (243 modules)
+ POST /api/portfolio/rebalance 200 in 2945ms
+ ✓ Compiled / in 134ms (1316 modules)
+ GET / 200 in 427ms
+ GET / 200 in 59ms
+ GET / 200 in 58ms
+ ✓ Compiled /api/portfolio/config in 131ms (1318 modules)
+ GET /api/portfolio/config?wallet=11111111111111111111111111111111 200 in 166ms
+ POST /api/portfolio/config 200 in 8ms
+ GET /api/portfolio/config?wallet=So11111111111111111111111111111111111111112 200 in 7ms
+ PATCH /api/portfolio/config 200 in 7ms
+ POST /api/portfolio/config 200 in 8ms
+ POST /api/portfolio/rebalance 200 in 3007ms
+ GET / 200 in 83ms
+ POST /api/portfolio/config 200 in 9ms
