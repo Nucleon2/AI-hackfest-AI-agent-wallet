@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 interface Props {
   orders: DCAOrder[];
   alerts: PriceAlert[];
+  alertPrices?: Record<string, number>;
   onCancelOrder: (id: string) => void;
   onDeleteAlert: (id: string) => void;
   networkWarning?: string | null;
@@ -16,6 +17,7 @@ interface Props {
 export function DCACard({
   orders,
   alerts,
+  alertPrices,
   onCancelOrder,
   onDeleteAlert,
   networkWarning,
@@ -70,7 +72,12 @@ export function DCACard({
       ) : (
         <div className="space-y-2">
           {alerts.map((a) => (
-            <AlertRow key={a.id} alert={a} onDelete={onDeleteAlert} />
+            <AlertRow
+              key={a.id}
+              alert={a}
+              currentPrice={alertPrices?.[a.token]}
+              onDelete={onDeleteAlert}
+            />
           ))}
         </div>
       )}
@@ -143,31 +150,95 @@ function DCARow({
   );
 }
 
+function getAlertBadge(alert: PriceAlert): { label: string; className: string } {
+  const actionType = alert.action_type ?? "notify";
+  if (actionType === "notify") {
+    return {
+      label: "Notify",
+      className: "border-indigo-500/20 bg-indigo-500/10 text-indigo-300",
+    };
+  }
+  // swap type — infer sub-type from tokens
+  const fromToken = alert.swap_from_token ?? "";
+  const toToken = alert.swap_to_token ?? "";
+  const isStablecoin = (t: string) =>
+    t === "USDC" || t === "USDT";
+
+  if (alert.direction === "below" && !isStablecoin(fromToken) && isStablecoin(toToken)) {
+    return { label: "Stop-Loss", className: "border-rose-500/20 bg-rose-500/10 text-rose-300" };
+  }
+  if (alert.direction === "above" && !isStablecoin(fromToken) && isStablecoin(toToken)) {
+    return { label: "Take-Profit", className: "border-amber-500/20 bg-amber-500/10 text-amber-300" };
+  }
+  // dip-buy or generic swap
+  return { label: "Dip Buy", className: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" };
+}
+
 function AlertRow({
   alert,
+  currentPrice,
   onDelete,
 }: {
   alert: PriceAlert;
+  currentPrice?: number;
   onDelete: (id: string) => void;
 }) {
   const arrow = alert.direction === "above" ? "▲" : "▼";
-  const color =
-    alert.direction === "above" ? "text-emerald-300" : "text-rose-300";
+  const arrowColor = alert.direction === "above" ? "text-emerald-300" : "text-rose-300";
+  const badge = getAlertBadge(alert);
+
+  const pctAway =
+    currentPrice && currentPrice > 0
+      ? ((alert.target_price - currentPrice) / currentPrice) * 100
+      : null;
+  const isClose = pctAway !== null && Math.abs(pctAway) < 5;
+
+  const swapDesc =
+    (alert.action_type ?? "notify") === "swap"
+      ? alert.swap_amount_pct
+        ? `Swap ${alert.swap_amount_pct}% ${alert.swap_from_token} → ${alert.swap_to_token}`
+        : `Swap $${alert.swap_amount_fixed} ${alert.swap_from_token} → ${alert.swap_to_token}`
+      : null;
+
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
-      <div className="flex items-center gap-2 text-sm text-white">
-        <span className={cn("text-[11px]", color)}>{arrow}</span>
-        <span className="font-medium">{alert.token}</span>
-        <span className="text-white/50">
-          {alert.direction === "above" ? "above" : "below"} ${alert.target_price}
-        </span>
+    <div className="flex flex-col gap-1 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <span className={cn("text-[11px]", arrowColor)}>{arrow}</span>
+          <span className="text-sm font-medium text-white">{alert.token}</span>
+          <span className="text-sm text-white/50">
+            {alert.direction === "above" ? "above" : "below"} ${alert.target_price}
+          </span>
+          <span
+            className={cn(
+              "rounded-full border px-1.5 py-px text-[10px]",
+              badge.className
+            )}
+          >
+            {badge.label}
+          </span>
+          {pctAway !== null && (
+            <span
+              className={cn(
+                "text-[10px]",
+                isClose ? "text-rose-400" : "text-white/30"
+              )}
+            >
+              {pctAway > 0 ? "+" : ""}
+              {pctAway.toFixed(1)}% away
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => onDelete(alert.id)}
+          className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/60 transition-colors hover:bg-white/10"
+        >
+          Remove
+        </button>
       </div>
-      <button
-        onClick={() => onDelete(alert.id)}
-        className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/60 transition-colors hover:bg-white/10"
-      >
-        Remove
-      </button>
+      {swapDesc && (
+        <div className="text-[10px] text-white/30 pl-4">{swapDesc}</div>
+      )}
     </div>
   );
 }
@@ -183,7 +254,7 @@ function EmptyOrders() {
 function EmptyAlerts() {
   return (
     <div className="py-3 text-center text-sm text-white/30">
-      No alerts. Try &ldquo;alert me when SOL hits $200&rdquo;.
+      No alerts. Try &ldquo;sell half my SOL if it drops below $150&rdquo;.
     </div>
   );
 }
