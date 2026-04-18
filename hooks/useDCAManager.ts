@@ -116,6 +116,10 @@ export function useDCAManager(
       setAlertPrices(prices);
 
       let anyTriggered = false;
+      // At most one swap-type alert per tick: the UI can only hold one
+      // pending swap at a time, so later swaps get deferred (left un-PATCHed)
+      // and picked up on the next poll. Notify-type alerts don't compete.
+      let swapTriggeredThisTick = false;
       for (const alert of json.data) {
         const price = prices[alert.token];
         if (!price || price <= 0) continue;
@@ -123,6 +127,9 @@ export function useDCAManager(
           (alert.direction === "above" && price >= alert.target_price) ||
           (alert.direction === "below" && price <= alert.target_price);
         if (!crossed) continue;
+
+        const needsSwap = alert.action_type === "swap";
+        if (needsSwap && swapTriggeredThisTick) continue;
 
         const markRes = await fetch(`/api/price-alerts/${alert.id}`, {
           method: "PATCH",
@@ -132,11 +139,8 @@ export function useDCAManager(
         const markJson = (await markRes.json()) as { success: boolean };
         if (markJson.success) {
           anyTriggered = true;
-          onAlertRef.current({
-            alert,
-            currentPrice: price,
-            needsSwap: alert.action_type === "swap",
-          });
+          if (needsSwap) swapTriggeredThisTick = true;
+          onAlertRef.current({ alert, currentPrice: price, needsSwap });
         }
       }
       if (anyTriggered) await refresh();

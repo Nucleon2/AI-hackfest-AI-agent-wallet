@@ -34,6 +34,7 @@ import {
   validateRecipient,
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
+import { fetchTokenUiBalance } from "@/lib/splBalance";
 import type { JupiterQuote } from "@/lib/jupiterClient";
 import type {
   Intent,
@@ -432,7 +433,7 @@ export function ChatInterface() {
 
   // --- DCA manager ---
   const handleAlertTriggered = useCallback(
-    ({
+    async ({
       alert,
       currentPrice,
       needsSwap,
@@ -458,36 +459,40 @@ export function ChatInterface() {
       const isStablecoin = (t: string) => t === "USDC" || t === "USDT";
 
       // Resolve fromToken UI amount:
-      //   pct-based: we only reliably have the SOL balance client-side;
-      //     for non-SOL fromToken (e.g. USDC dip-buy), skip auto-queue.
-      //   fixed USD: convert USD → fromToken units via currentPrice.
-      //     If fromToken is a stablecoin, USD ≈ fromToken (1:1).
-      //     Otherwise divide by currentPrice (the watched token's price).
+      //   pct-based: fetch the fromToken balance (SOL from cache, SPL via RPC).
+      //   fixed USD: convert USD → fromToken units via currentPrice, or 1:1 for
+      //   stablecoins. currentPrice <= 0 leaves fromAmount null → graceful fallback.
       let fromAmount: number | null = null;
       if (alert.swap_amount_pct != null) {
-        if (fromToken === "SOL") {
-          fromAmount = ((balance ?? 0) * alert.swap_amount_pct) / 100;
+        if (publicKey) {
+          const fromBalance = await fetchTokenUiBalance(
+            connection,
+            publicKey,
+            fromToken,
+            fromToken === "SOL" ? balance : null
+          );
+          if (fromBalance != null && fromBalance > 0) {
+            fromAmount = (fromBalance * alert.swap_amount_pct) / 100;
+          }
         }
-        // For non-SOL pct-based alerts we don't have the SPL balance — skip auto-queue
       } else if (alert.swap_amount_fixed != null) {
         const usdAmount = alert.swap_amount_fixed;
         if (isStablecoin(fromToken)) {
-          fromAmount = usdAmount; // USDC/USDT 1:1 with USD
+          fromAmount = usdAmount;
         } else if (currentPrice > 0) {
-          fromAmount = usdAmount / currentPrice; // USD → fromToken units
+          fromAmount = usdAmount / currentPrice;
         }
-        // currentPrice <= 0 leaves fromAmount null → graceful fallback below
       }
 
       const amtDesc = alert.swap_amount_pct != null
         ? `${alert.swap_amount_pct}% of your ${fromToken}`
         : `$${alert.swap_amount_fixed} worth of ${fromToken}`;
 
-      if (fromAmount == null) {
+      if (fromAmount == null || fromAmount <= 0) {
         appendMessage({
           id: crypto.randomUUID(),
           role: "ai",
-          text: `Price alert hit! ${alert.token} reached ${priceStr}. Open your wallet to manually swap ${amtDesc} → ${toToken} (balance unavailable for auto-execute).`,
+          text: `Price alert hit! ${alert.token} reached ${priceStr}. Couldn't auto-execute ${amtDesc} → ${toToken} — balance unavailable or zero.`,
           ts: Date.now(),
         });
         return;
@@ -508,9 +513,9 @@ export function ChatInterface() {
         slippageBps: 100,
       });
     },
-    // appendMessage and setPendingSwap are stable refs; balance from useWalletBalance
+    // appendMessage and setPendingSwap are stable refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [balance]
+    [balance, connection, publicKey]
   );
 
   const {
