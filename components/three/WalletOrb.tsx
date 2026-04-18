@@ -19,7 +19,7 @@ type DistortMaterial = THREE.MeshStandardMaterial & {
   speed: number;
 };
 
-export type OrbState = "idle" | "processing" | "confirmed" | "error";
+export type OrbState = "idle" | "processing" | "confirmed" | "error" | "scanning";
 
 interface OrbVisual {
   color: string;
@@ -58,6 +58,13 @@ const ORB_VISUALS: Record<OrbState, OrbVisual> = {
     rotationMultiplier: 0.6,
     particleColor: "#fecaca",
   },
+  scanning: {
+    color: "#06b6d4",
+    distort: 0.45,
+    speed: 2.5,
+    rotationMultiplier: 1.8,
+    particleColor: "#67e8f9",
+  },
 };
 
 function generateSphereParticles(count: number): Float32Array {
@@ -93,6 +100,7 @@ export function WalletOrb({ state = "idle" }: WalletOrbProps) {
   );
   const livePositions = useMemo(() => basePositions.slice(), [basePositions]);
   const burstProgress = useRef(0);
+  const prevStateRef = useRef<OrbState>("idle");
 
   const idleVisual = ORB_VISUALS.idle;
   const currentDistort = useRef(idleVisual.distort);
@@ -104,6 +112,15 @@ export function WalletOrb({ state = "idle" }: WalletOrbProps) {
   const visual = ORB_VISUALS[state];
 
   useFrame((_, delta) => {
+    // Cleanup particle positions when exiting scanning state
+    if (prevStateRef.current === "scanning" && state !== "scanning") {
+      for (let i = 0; i < livePositions.length; i++) livePositions[i] = basePositions[i];
+      if (particlesRef.current) {
+        (particlesRef.current.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      }
+    }
+    prevStateRef.current = state;
+
     const t = Math.min(1, delta * VISUAL_SMOOTHING);
 
     currentDistort.current += (visual.distort - currentDistort.current) * t;
@@ -157,6 +174,18 @@ export function WalletOrb({ state = "idle" }: WalletOrbProps) {
       if (pointsMaterialRef.current) {
         pointsMaterialRef.current.opacity = 0.8 - eased * 0.5;
       }
+    }
+
+    // Scanning state: vertical particle sweep wave
+    if (state === "scanning" && particlesRef.current) {
+      const now = performance.now() * 0.001;
+      const attr = particlesRef.current.geometry.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const base_y = basePositions[i * 3 + 1];
+        const sweepPhase = ((base_y / PARTICLE_RADIUS_MAX + 1) * 0.5 - (now * 0.4 % 1)) * Math.PI * 4;
+        livePositions[i * 3 + 1] = base_y + Math.sin(sweepPhase) * 0.18;
+      }
+      attr.needsUpdate = true;
     }
   });
 
