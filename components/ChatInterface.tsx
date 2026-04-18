@@ -547,7 +547,42 @@ export function ChatInterface() {
         return;
       }
 
-      const amount = typeof intent.amount === "number" ? intent.amount : null;
+      let amount = typeof intent.amount === "number" ? intent.amount : null;
+
+      // "unstake all" / "unstake my mSOL" → amount is null. Resolve to
+      // the current balance from the staking status endpoint before
+      // calling the preview.
+      if (amount === null && intent.action === "unstake") {
+        try {
+          const statusRes = await fetch(
+            `/api/stake/status?wallet=${encodeURIComponent(publicKey.toBase58())}`,
+            { cache: "no-store" }
+          );
+          const statusJson = (await statusRes.json()) as
+            | { success: true; data: { msolBalance: number; jitoBalance: number } }
+            | { success: false; error?: string };
+          if (cancelled) return;
+          if (statusJson.success) {
+            const bal =
+              intent.provider === "jito"
+                ? statusJson.data.jitoBalance
+                : statusJson.data.msolBalance;
+            if (bal > 0) {
+              amount = bal;
+              setPendingStake({ ...intent, amount: bal });
+              return;
+            }
+            setStakePreviewError(
+              `You have no ${intent.provider === "jito" ? "JitoSOL" : "mSOL"} to unstake.`
+            );
+            setStakePreviewStatus("error");
+            return;
+          }
+        } catch {
+          // fall through — show the generic "need an amount" error below
+        }
+      }
+
       if (amount === null) {
         if (cancelled) return;
         setStakePreviewError(
