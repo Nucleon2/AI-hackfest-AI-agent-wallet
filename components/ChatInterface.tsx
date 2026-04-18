@@ -10,6 +10,8 @@ import { ReceiptCard } from "@/components/ReceiptCard";
 import { TransactionHistoryCard } from "@/components/TransactionHistoryCard";
 import { ScheduledPaymentsCard } from "@/components/ScheduledPaymentsCard";
 import { ContactsCard } from "@/components/ContactsCard";
+import { AutoApproveToggle } from "@/components/AutoApproveToggle";
+import { useAutoApprove } from "@/hooks/useAutoApprove";
 import {
   TransactionPreview,
   type PreviewStatus,
@@ -132,6 +134,8 @@ export function ChatInterface() {
 
   const { schedules, duePayment, loading: schedulesLoading, refresh: refreshSchedules, clearDue } =
     useScheduledPayments(publicKey?.toBase58() ?? null);
+
+  const { autoApprove, toggle: toggleAutoApprove } = useAutoApprove();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -337,6 +341,28 @@ export function ChatInterface() {
       cancelled = true;
     };
   }, [pendingScheduledExec, publicKey, connection]);
+
+  // Auto-approve: fire confirm handlers as soon as preflight reaches "ready"
+  useEffect(() => {
+    if (autoApprove && previewStatus === "ready" && pendingSend) {
+      handleConfirmSend();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApprove, previewStatus, pendingSend]);
+
+  useEffect(() => {
+    if (autoApprove && swapPreviewStatus === "ready" && pendingSwap) {
+      handleConfirmSwap();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApprove, swapPreviewStatus, pendingSwap]);
+
+  useEffect(() => {
+    if (autoApprove && scheduleExecStatus === "ready" && pendingScheduledExec) {
+      handleConfirmScheduledExec();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApprove, scheduleExecStatus, pendingScheduledExec]);
 
   function appendMessage(msg: Message) {
     setMessages((prev) => [...prev, msg]);
@@ -816,6 +842,12 @@ export function ChatInterface() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      {/* Chat header */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.06] flex-shrink-0">
+        <span className="text-[10px] uppercase tracking-widest text-white/30">AI Wallet</span>
+        <AutoApproveToggle autoApprove={autoApprove} onToggle={toggleAutoApprove} />
+      </div>
+
       {/* Messages */}
       <div className="relative flex-1 min-h-0">
         <div className="absolute inset-0 overflow-y-auto space-y-5 px-4 py-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10">
