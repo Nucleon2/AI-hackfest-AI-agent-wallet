@@ -139,6 +139,21 @@ export function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_threat_log_wallet
       ON threat_log (wallet_pubkey, created_at DESC);
   `);
+
+  // Migration: extend price_alerts with smart-alert (stop-loss / take-profit) columns
+  const migrateColumns: [string, string][] = [
+    ["action_type",       "TEXT NOT NULL DEFAULT 'notify'"],
+    ["swap_from_token",   "TEXT"],
+    ["swap_to_token",     "TEXT"],
+    ["swap_amount_pct",   "REAL"],
+    ["swap_amount_fixed", "REAL"],
+    ["label",             "TEXT"],
+  ];
+  for (const [col, def] of migrateColumns) {
+    try { _db.exec(`ALTER TABLE price_alerts ADD COLUMN ${col} ${def}`); }
+    catch { /* column already exists — safe to ignore */ }
+  }
+
   return _db;
 }
 

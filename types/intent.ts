@@ -24,7 +24,9 @@ export type IntentAction =
   | "dca"
   | "view_dca"
   | "cancel_dca"
-  | "price_alert";
+  | "price_alert"
+  | "view_alerts"
+  | "cancel_alert";
 
 export type StakingProvider = "marinade" | "jito";
 
@@ -244,6 +246,21 @@ export interface PriceAlertIntent {
   token: string;
   targetPrice: number;
   direction: "above" | "below";
+  action_type?: "notify" | "swap";
+  swap_from_token?: string;
+  swap_to_token?: string;
+  swap_amount_pct?: number;   // 0–100
+  swap_amount_fixed?: number; // USD
+  label?: string;
+}
+
+export interface ViewAlertsIntent {
+  action: "view_alerts";
+}
+
+export interface CancelAlertIntent {
+  action: "cancel_alert";
+  alert_id?: string;
 }
 
 export interface DCAOrder {
@@ -271,6 +288,12 @@ export interface PriceAlert {
   is_triggered: number;
   created_at: number;
   triggered_at: number | null;
+  action_type: "notify" | "swap";
+  swap_from_token: string | null;
+  swap_to_token: string | null;
+  swap_amount_pct: number | null;
+  swap_amount_fixed: number | null;
+  label: string | null;
 }
 
 export type Intent =
@@ -299,7 +322,9 @@ export type Intent =
   | DCAIntent
   | ViewDCAIntent
   | CancelDCAIntent
-  | PriceAlertIntent;
+  | PriceAlertIntent
+  | ViewAlertsIntent
+  | CancelAlertIntent;
 
 export interface WalletContext {
   publicKey?: string;
@@ -423,8 +448,15 @@ export function isIntent(value: unknown): value is Intent {
         typeof value.token === "string" &&
         typeof value.targetPrice === "number" &&
         value.targetPrice > 0 &&
-        (value.direction === "above" || value.direction === "below")
+        (value.direction === "above" || value.direction === "below") &&
+        (value.action_type === undefined ||
+          value.action_type === "notify" ||
+          value.action_type === "swap")
       );
+    case "view_alerts":
+      return true;
+    case "cancel_alert":
+      return value.alert_id === undefined || typeof value.alert_id === "string";
     default:
       return false;
   }
