@@ -304,6 +304,7 @@ export function ChatInterface() {
 
   const [securityAnalysis, setSecurityAnalysis] = useState<TxAnalysis | null>(null);
   const [isScanning, setIsScanning] = useState(false);
+  const scanAbortRef = useRef<AbortController | null>(null);
 
   const { schedules, duePayment, loading: schedulesLoading, refresh: refreshSchedules, clearDue } =
     useScheduledPayments(publicKey?.toBase58() ?? null);
@@ -321,6 +322,11 @@ export function ChatInterface() {
   const runSecurityScan = useCallback(
     async (txContext: Record<string, unknown>) => {
       if (!publicKey) return;
+      // Cancel any in-flight scan from a previous transaction
+      scanAbortRef.current?.abort();
+      const abort = new AbortController();
+      scanAbortRef.current = abort;
+
       setIsScanning(true);
       setSecurityAnalysis(null);
       setOrbState("scanning");
@@ -328,19 +334,24 @@ export function ChatInterface() {
         const res = await fetch("/api/analyze-transaction", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: abort.signal,
           body: JSON.stringify({
             txContext,
             walletPubkey: publicKey.toBase58(),
             solBalance: balance ?? 0,
           }),
         });
+        if (abort.signal.aborted) return;
         const json = (await res.json()) as { success: boolean; data?: TxAnalysis };
-        if (json.success && json.data) setSecurityAnalysis(json.data);
-      } catch {
-        // Graceful degradation — scan failure never blocks signing
+        if (!abort.signal.aborted && json.success && json.data) setSecurityAnalysis(json.data);
+      } catch (err) {
+        // Ignore aborted fetches; all other failures degrade silently
+        if (err instanceof Error && err.name === "AbortError") return;
       } finally {
-        setIsScanning(false);
-        setOrbState("idle");
+        if (!abort.signal.aborted) {
+          setIsScanning(false);
+          setOrbState("idle");
+        }
       }
     },
     [publicKey, balance]
@@ -1503,6 +1514,8 @@ export function ChatInterface() {
     setPendingStake(null);
     preparedTxRef.current = null;
     preparedSwapRef.current = null;
+    scanAbortRef.current?.abort();
+    scanAbortRef.current = null;
     setSecurityAnalysis(null);
     setIsScanning(false);
     setOrbState("idle");
@@ -2208,6 +2221,7 @@ export function ChatInterface() {
           feeLamports={previewFeeLamports}
           recipientPubkey={previewRecipientPubkey}
           analysis={securityAnalysis}
+          isScanning={isScanning}
           onConfirm={handleConfirmSend}
           onCancel={handleCancelPreview}
         />
@@ -2218,6 +2232,7 @@ export function ChatInterface() {
           errorMessage={swapPreviewError}
           quote={swapQuoteDisplay}
           analysis={securityAnalysis}
+          isScanning={isScanning}
           onConfirm={handleConfirmSwap}
           onCancel={handleCancelPreview}
         />
@@ -2228,6 +2243,7 @@ export function ChatInterface() {
           errorMessage={stakePreviewError}
           quote={stakeQuoteDisplay}
           analysis={securityAnalysis}
+          isScanning={isScanning}
           onConfirm={handleConfirmStake}
           onCancel={handleCancelPreview}
         />
