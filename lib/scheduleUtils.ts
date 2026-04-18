@@ -57,12 +57,14 @@ function parseScheduledDate(
 ): number {
   if (!scheduled_date) return nowMs + 24 * 60 * 60 * 1000;
 
-  const daysMatch = scheduled_date.match(/^in (\d+) days?$/i);
-  if (daysMatch) return nowMs + parseInt(daysMatch[1]) * 24 * 60 * 60 * 1000;
+  const minutesMatch = scheduled_date.match(/^in (\d+) min(utes?)?$/i);
+  if (minutesMatch) return nowMs + parseInt(minutesMatch[1]) * 60 * 1000;
 
   const hoursMatch = scheduled_date.match(/^in (\d+) hours?$/i);
-  if (hoursMatch)
-    return nowMs + parseInt(hoursMatch[1]) * 60 * 60 * 1000;
+  if (hoursMatch) return nowMs + parseInt(hoursMatch[1]) * 60 * 60 * 1000;
+
+  const daysMatch = scheduled_date.match(/^in (\d+) days?$/i);
+  if (daysMatch) return nowMs + parseInt(daysMatch[1]) * 24 * 60 * 60 * 1000;
 
   const isoMatch = scheduled_date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoMatch) {

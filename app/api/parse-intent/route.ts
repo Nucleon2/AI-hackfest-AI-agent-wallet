@@ -23,13 +23,15 @@ Rules:
 For "schedule": the user wants to set up a future or recurring payment.
   Extract: amount (number), token (uppercase string), recipient (string), frequency ("once"|"daily"|"weekly"|"monthly").
   For weekly: also extract day_of_week as lowercase English day name (e.g. "friday").
-  For "once": extract scheduled_date as ISO date "YYYY-MM-DD" for specific dates, or "in N days" / "in N hours" for relative times.
+  For "once": extract scheduled_date as ISO date "YYYY-MM-DD" for specific dates, or "in N minutes" / "in N hours" / "in N days" for relative times.
   Always generate a short human-readable label field (e.g. "Every Friday", "April 25th", "In 1 day").
   Examples:
     "Send 10 USDC to ABC every Friday"
       -> { "action": "schedule", "amount": 10, "token": "USDC", "recipient": "ABC", "frequency": "weekly", "day_of_week": "friday", "label": "Every Friday" }
     "Send 0.5 SOL to XYZ in one day"
       -> { "action": "schedule", "amount": 0.5, "token": "SOL", "recipient": "XYZ", "frequency": "once", "scheduled_date": "in 1 day", "label": "In 1 day" }
+    "Send 0.2 SOL to XYZ in 30 minutes"
+      -> { "action": "schedule", "amount": 0.2, "token": "SOL", "recipient": "XYZ", "frequency": "once", "scheduled_date": "in 30 minutes", "label": "In 30 minutes" }
     "Send 5 SOL to XYZ on April 25"
       -> { "action": "schedule", "amount": 5, "token": "SOL", "recipient": "XYZ", "frequency": "once", "scheduled_date": "2026-04-25", "label": "April 25th" }
     "Send 2 SOL to XYZ every month"
