@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { PortfolioConfig } from "@/types/intent";
+import type { PortfolioConfig, DCAOrder, PriceAlert } from "@/types/intent";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
 import { useChatSessionStore } from "@/lib/stores/chatSessionStore";
@@ -31,6 +31,8 @@ export function Sidebar() {
   const { sessions, activeSessionId, setActiveSessionId } = useChatSessionStore();
   const { createSession, deleteSession } = useChatSessions(publicKey?.toBase58() ?? null);
   const [portfolioConfig, setPortfolioConfig] = useState<PortfolioConfig | null>(null);
+  const [dcaCount, setDcaCount] = useState(0);
+  const [alertCount, setAlertCount] = useState(0);
 
   useEffect(() => {
     if (!publicKey) { setPortfolioConfig(null); return; }
@@ -40,6 +42,32 @@ export function Sidebar() {
         if (json.success) setPortfolioConfig(json.data ?? null);
       })
       .catch(() => {});
+  }, [publicKey]);
+
+  useEffect(() => {
+    if (!publicKey) {
+      setDcaCount(0);
+      setAlertCount(0);
+      return;
+    }
+    const wallet = publicKey.toBase58();
+    const refresh = () => {
+      fetch(`/api/dca?wallet=${wallet}`)
+        .then((r) => r.json())
+        .then((json: { success: boolean; data?: DCAOrder[] }) => {
+          if (json.success) setDcaCount(json.data?.length ?? 0);
+        })
+        .catch(() => {});
+      fetch(`/api/price-alerts?wallet=${wallet}`)
+        .then((r) => r.json())
+        .then((json: { success: boolean; data?: PriceAlert[] }) => {
+          if (json.success) setAlertCount(json.data?.length ?? 0);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const interval = setInterval(refresh, 30_000);
+    return () => clearInterval(interval);
   }, [publicKey]);
 
   const shortAddress = publicKey
@@ -150,6 +178,29 @@ export function Sidebar() {
               <p className="mt-1.5 text-[10px] text-white/20">
                 Last rebalanced {relativeTime(portfolioConfig.last_rebalanced_at)}
               </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* DCA + alerts status */}
+      {connected && (dcaCount > 0 || alertCount > 0) && (
+        <div className="border-b border-white/[0.06] px-4 py-4">
+          <p className="mb-3 px-2 text-[10px] uppercase tracking-[0.15em] text-white/25">
+            Automations
+          </p>
+          <div className="space-y-1.5 rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5">
+            {dcaCount > 0 && (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-white/60">Active DCAs</span>
+                <span className="font-semibold text-white/80">{dcaCount}</span>
+              </div>
+            )}
+            {alertCount > 0 && (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-white/60">Price alerts</span>
+                <span className="font-semibold text-white/80">{alertCount}</span>
+              </div>
             )}
           </div>
         </div>

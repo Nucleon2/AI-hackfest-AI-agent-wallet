@@ -11,12 +11,12 @@ export interface TriggeredAlert {
 export interface UseDCAManagerReturn {
   orders: DCAOrder[];
   alerts: PriceAlert[];
-  duePreview: DCAOrder | null;
+  dueOrder: DCAOrder | null;
   loading: boolean;
   refresh: () => Promise<void>;
   cancelOrder: (id: string) => Promise<boolean>;
   deleteAlert: (id: string) => Promise<boolean>;
-  clearDuePreview: () => void;
+  clearDueOrder: () => void;
 }
 
 async function fetchPrices(tokens: string[]): Promise<Record<string, number>> {
@@ -32,19 +32,15 @@ async function fetchPrices(tokens: string[]): Promise<Record<string, number>> {
 
 export function useDCAManager(
   walletPubkey: string | null,
-  onExecuteDCA: (order: DCAOrder) => Promise<boolean>,
   onAlertTriggered: (triggered: TriggeredAlert) => void
 ): UseDCAManagerReturn {
   const [orders, setOrders] = useState<DCAOrder[]>([]);
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
-  const [duePreview, setDuePreview] = useState<DCAOrder | null>(null);
+  const [dueOrder, setDueOrder] = useState<DCAOrder | null>(null);
   const [loading, setLoading] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const executingRef = useRef(false);
-  const onExecuteRef = useRef(onExecuteDCA);
   const onAlertRef = useRef(onAlertTriggered);
-  onExecuteRef.current = onExecuteDCA;
   onAlertRef.current = onAlertTriggered;
 
   const refresh = useCallback(async () => {
@@ -80,7 +76,7 @@ export function useDCAManager(
         | { success: true; data: DCAOrder[] }
         | { success: false };
       if (json.success && json.data.length > 0) {
-        setDuePreview(json.data[0]);
+        setDueOrder(json.data[0]);
       }
     } catch {
       // ignore polling errors
@@ -127,7 +123,7 @@ export function useDCAManager(
     if (!walletPubkey) {
       setOrders([]);
       setAlerts([]);
-      setDuePreview(null);
+      setDueOrder(null);
       return;
     }
     refresh();
@@ -141,25 +137,6 @@ export function useDCAManager(
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [walletPubkey, refresh, pollDue, pollAlerts]);
-
-  // Auto-execute the due preview. The consumer's onExecuteDCA decides
-  // whether to prompt the user or auto-approve. The hook just kicks it off
-  // once per detection and advances via /executed on success.
-  useEffect(() => {
-    if (!duePreview || executingRef.current) return;
-    executingRef.current = true;
-    (async () => {
-      try {
-        const ok = await onExecuteRef.current(duePreview);
-        if (ok) {
-          await refresh();
-        }
-      } finally {
-        setDuePreview(null);
-        executingRef.current = false;
-      }
-    })();
-  }, [duePreview, refresh]);
 
   const cancelOrder = useCallback(
     async (id: string): Promise<boolean> => {
@@ -191,16 +168,16 @@ export function useDCAManager(
     [walletPubkey, refresh]
   );
 
-  const clearDuePreview = useCallback(() => setDuePreview(null), []);
+  const clearDueOrder = useCallback(() => setDueOrder(null), []);
 
   return {
     orders,
     alerts,
-    duePreview,
+    dueOrder,
     loading,
     refresh,
     cancelOrder,
     deleteAlert,
-    clearDuePreview,
+    clearDueOrder,
   };
 }
