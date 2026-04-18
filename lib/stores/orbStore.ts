@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type OrbState = "idle" | "processing" | "confirmed" | "error";
+export type OrbState = "idle" | "processing" | "confirmed" | "error" | "scanning";
 
 interface OrbStore {
   state: OrbState;
