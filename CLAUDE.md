@@ -253,6 +253,7 @@ Never expose `ANTHROPIC_API_KEY` to the client. All Claude calls go through `/ap
 5. **Chat session persistence** — conversations saved per wallet in SQLite, visible in sidebar
 6. **Auto-approve mode** — toggle to execute transactions without manual confirmation
 7. **AI Portfolio Manager** — autonomous rebalancing (see below)
+8. **Voice input** — click the mic next to the send button, speak a command, transcript auto-submits through the normal intent pipeline (Web Speech API; Chromium-based browsers)
 
 ---
 
@@ -321,8 +322,7 @@ CREATE TABLE portfolio_configs (
 
 ## Post-MVP Features (remaining)
 
-1. **Voice input** — Web Speech API, transcribes into chat input
-2. **True background rebalancing** — server-side cron with pre-signed transactions (requires custodial key)
+1. **True background rebalancing** — server-side cron with pre-signed transactions (requires custodial key)
 
 ---
 
