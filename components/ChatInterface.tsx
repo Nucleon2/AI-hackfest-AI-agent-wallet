@@ -1817,5 +1817,9 @@ function intentToMessage(intent: Intent): Message {
       return { ...base, component: "portfolio_manager" as const };
     case "set_drift_threshold":
       return { ...base, text: `Drift threshold updated to ${intent.threshold}%.` };
+    case "explain_tx":
+      return { ...base, text: `Looking up transaction ${shortAddress(intent.signature, 8, 8)}…` };
+    case "spending_insights":
+      return { ...base, text: "Analyzing your recent transactions…" };
   }
 }
