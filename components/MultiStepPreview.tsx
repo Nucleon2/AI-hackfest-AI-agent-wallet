@@ -84,9 +84,11 @@ function stepSummary(step: MultiStepStep): string {
     return `Swap ${step.amount} ${step.fromToken} → ${step.toToken}`;
   }
   const amt = step.amount !== null ? String(step.amount) : "(swap output)";
-  const recip = step.recipient.length > 20
-    ? shortAddress(step.recipient, 4, 4)
-    : step.recipient;
+  const recip = step.recipient
+    ? step.recipient.length > 20
+      ? shortAddress(step.recipient, 4, 4)
+      : step.recipient
+    : "(unknown recipient)";
   return `Send ${amt} ${step.token} → ${recip}`;
 }
 
@@ -137,7 +139,7 @@ function SendStepDetail({
 }) {
   if (step.type !== "send") return null;
   const feeSol = feeLamports !== null ? (feeLamports / LAMPORTS_PER_SOL).toFixed(6) : null;
-  const displayAddr = resolvedRecipient ?? step.recipient;
+  const displayAddr = resolvedRecipient ?? step.recipient ?? "(unknown recipient)";
   return (
     <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
       <div className="rounded-lg border border-white/[0.06] bg-white/[0.03] p-2">

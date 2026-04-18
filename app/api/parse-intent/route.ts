@@ -75,6 +75,8 @@ Rules for multi_step:
   - Maximum supported steps: 3.
   - If any step has an unclear recipient or amount that cannot be chained, return action "unknown" with a clarification.
   - If recipient looks like a contact name (not a base58 address), include it as-is — the frontend will resolve it.
+  - multi_step ONLY supports steps of type "swap" or "send". Never include "history", "balance", or any read-only query as a step.
+  - If the user chains a read-only query (history, balance) with a transaction, return action "unknown" with a clarification asking them to ask separately.
 
 Examples:
   "Swap 50 USDC to SOL then send it to Ahmad"
@@ -187,6 +189,34 @@ export async function POST(req: NextRequest) {
   }
 
   const parsed = safeParse(extractText(response));
+
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    (parsed as Record<string, unknown>).action === "multi_step"
+  ) {
+    const steps = (parsed as Record<string, unknown>).steps;
+    const validStepTypes = ["swap", "send"];
+    const allValid =
+      Array.isArray(steps) &&
+      steps.every(
+        (s: unknown) =>
+          typeof s === "object" &&
+          s !== null &&
+          validStepTypes.includes((s as Record<string, unknown>).type as string)
+      );
+    if (!allValid) {
+      return NextResponse.json({
+        success: true,
+        data: {
+          action: "unknown",
+          clarification:
+            "I can only chain swap and send actions together. For balance or history, please ask that separately first.",
+        },
+      });
+    }
+  }
+
   const intent: Intent = isIntent(parsed)
     ? parsed
     : {
