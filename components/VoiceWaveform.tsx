@@ -38,7 +38,7 @@ export function VoiceWaveform({ visible, label }: VoiceWaveformProps) {
               />
             ))}
           </div>
-          <span className="font-medium tracking-wide">
+          <span className="max-w-[240px] truncate font-medium tracking-wide">
             {label ?? "Listening…"}
           </span>
         </motion.div>

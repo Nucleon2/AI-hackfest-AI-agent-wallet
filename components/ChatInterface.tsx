@@ -1444,7 +1444,10 @@ export function ChatInterface() {
       {/* Input row */}
       <div className="relative flex-shrink-0 px-4 pb-4 pt-2">
         <div className="relative flex items-end gap-2 rounded-2xl border border-white/10 bg-black/50 p-2.5 backdrop-blur-2xl">
-          <VoiceWaveform visible={voice.state === "listening"} />
+          <VoiceWaveform
+            visible={voice.state === "listening"}
+            label={voice.interimTranscript || "Listening…"}
+          />
           <textarea
             ref={inputRef}
             rows={1}
