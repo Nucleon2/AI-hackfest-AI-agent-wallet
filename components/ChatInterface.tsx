@@ -66,17 +66,17 @@ interface Message {
 const WELCOME: Message = {
   id: "welcome",
   role: "ai",
-  text: "Hey! I'm your AI wallet assistant. Connect a Phantom wallet and try:\n\u2022 \"What's my balance?\"\n\u2022 \"Swap 10 USDC for SOL\"\n\u2022 \"Send 0.1 SOL to alice.sol\"",
+  text: "Hey! I'm your AI wallet assistant. Connect a Phantom wallet and try:\n\u2022 \"What's my balance?\"\n\u2022 \"Swap 10 USDC for SOL\"\n\u2022 \"Send 0.1 SOL to Alice\" — save contacts first!\n\u2022 \"Save [address] as Alice\"",
   ts: Date.now(),
 };
 
 const SUGGESTIONS = [
   "What's my balance?",
   "Swap 10 USDC for SOL",
+  "Show my contacts",
   "Send 0.1 SOL to alice.sol",
   "Show my last 5 transactions",
   "Send 5 SOL every Friday",
-  "Show my scheduled payments",
 ];
 
 interface PreparedTx {
