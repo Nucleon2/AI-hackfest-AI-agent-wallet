@@ -9,12 +9,12 @@ import { PortfolioCard } from "@/components/PortfolioCard";
 import { ReceiptCard } from "@/components/ReceiptCard";
 import { TransactionHistoryCard } from "@/components/TransactionHistoryCard";
 import { ScheduledPaymentsCard } from "@/components/ScheduledPaymentsCard";
+import { ContactsCard } from "@/components/ContactsCard";
 import {
   TransactionPreview,
   type PreviewStatus,
   type SwapQuoteDisplay,
 } from "@/components/TransactionPreview";
-import { useOrbStore } from "@/lib/stores/orbStore";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
 import { useScheduledPayments } from "@/hooks/useScheduledPayments";
 import {
@@ -25,12 +25,12 @@ import {
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
 import type { JupiterQuote } from "@/lib/jupiterClient";
-import type { Intent, SendIntent, SwapIntent } from "@/types/intent";
+import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent } from "@/types/intent";
 import type { ScheduledPayment } from "@/types/schedule";
 import { cn } from "@/lib/utils";
 
 type Role = "user" | "ai";
-type MessageComponent = "portfolio" | "receipt" | "history" | "schedules";
+type MessageComponent = "portfolio" | "receipt" | "history" | "schedules" | "contacts";
 
 type ReceiptPayload =
   | {
@@ -94,7 +94,6 @@ export function ChatInterface() {
   const { connection } = useConnection();
   const { connected, publicKey, sendTransaction } = useWallet();
   const { balance } = useWalletBalance();
-  const setOrbStatus = useOrbStore((s) => s.setOrbState);
 
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [input, setInput] = useState("");
@@ -134,17 +133,9 @@ export function ChatInterface() {
   const { schedules, duePayment, loading: schedulesLoading, refresh: refreshSchedules, clearDue } =
     useScheduledPayments(publicKey?.toBase58() ?? null);
 
-  const orbResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  useEffect(() => {
-    return () => {
-      if (orbResetTimerRef.current) clearTimeout(orbResetTimerRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     if (!pendingSend) return;
@@ -347,16 +338,35 @@ export function ChatInterface() {
     };
   }, [pendingScheduledExec, publicKey, connection]);
 
-  function scheduleOrbReset(delayMs = 2000) {
-    if (orbResetTimerRef.current) clearTimeout(orbResetTimerRef.current);
-    orbResetTimerRef.current = setTimeout(() => {
-      setOrbStatus("idle");
-      orbResetTimerRef.current = null;
-    }, delayMs);
-  }
-
   function appendMessage(msg: Message) {
     setMessages((prev) => [...prev, msg]);
+  }
+
+  async function resolveRecipient(
+    recipient: string,
+    walletPubkey: string
+  ): Promise<{ ok: true; address: string } | { ok: false; error: string }> {
+    try {
+      new PublicKey(recipient);
+      return { ok: true, address: recipient };
+    } catch {
+      // not a raw address — look up in contacts
+    }
+    try {
+      const res = await fetch(
+        `/api/contacts/resolve?wallet=${walletPubkey}&name=${encodeURIComponent(recipient)}`
+      );
+      const json = (await res.json()) as
+        | { success: true; data: { address: string } }
+        | { success: false; error?: string };
+      if (json.success) return { ok: true, address: json.data.address };
+      return {
+        ok: false,
+        error: `Unknown contact "${recipient}". Save it first: "save [address] as ${recipient}".`,
+      };
+    } catch {
+      return { ok: false, error: `Failed to resolve contact "${recipient}".` };
+    }
   }
 
   async function send(text: string) {
@@ -395,13 +405,24 @@ export function ChatInterface() {
           ts: Date.now(),
         });
       } else if (data.data.action === "send") {
-        appendMessage({
-          id: crypto.randomUUID(),
-          role: "ai",
-          text: `Let's confirm this send of ${data.data.amount} ${data.data.token}.`,
-          ts: Date.now(),
-        });
-        setPendingSend(data.data);
+        const sendIntent = data.data;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet to send.", ts: Date.now() });
+        } else {
+          const resolved = await resolveRecipient(sendIntent.recipient, publicKey.toBase58());
+          if (!resolved.ok) {
+            appendMessage({ id: crypto.randomUUID(), role: "ai", text: resolved.error, ts: Date.now() });
+          } else {
+            const resolvedIntent: SendIntent = { ...sendIntent, recipient: resolved.address };
+            appendMessage({
+              id: crypto.randomUUID(),
+              role: "ai",
+              text: `Let's confirm this send of ${resolvedIntent.amount} ${resolvedIntent.token}.`,
+              ts: Date.now(),
+            });
+            setPendingSend(resolvedIntent);
+          }
+        }
       } else if (data.data.action === "swap") {
         appendMessage({
           id: crypto.randomUUID(),
@@ -410,8 +431,58 @@ export function ChatInterface() {
           ts: Date.now(),
         });
         setPendingSwap(data.data);
+      } else if (data.data.action === "save_contact") {
+        const intent = data.data as SaveContactIntent;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet to save contacts.", ts: Date.now() });
+        } else {
+          const res2 = await fetch("/api/contacts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ walletPubkey: publicKey.toBase58(), name: intent.name, address: intent.address }),
+          });
+          const json2 = (await res2.json()) as { success: boolean; error?: string };
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: json2.success
+              ? `Saved! "${intent.name}" is now in your address book.`
+              : json2.error ?? "Failed to save contact.",
+            ts: Date.now(),
+          });
+        }
+      } else if (data.data.action === "list_contacts") {
+        appendMessage({ id: crypto.randomUUID(), role: "ai", component: "contacts", ts: Date.now() });
+      } else if (data.data.action === "delete_contact") {
+        const intent = data.data as DeleteContactIntent;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet to manage contacts.", ts: Date.now() });
+        } else {
+          const res2 = await fetch(
+            `/api/contacts/${encodeURIComponent(intent.name)}?wallet=${publicKey.toBase58()}`,
+            { method: "DELETE" }
+          );
+          const json2 = (await res2.json()) as { success: boolean; error?: string };
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: json2.success
+              ? `Removed "${intent.name}" from your address book.`
+              : json2.error ?? "Failed to remove contact.",
+            ts: Date.now(),
+          });
+        }
       } else if (data.data.action === "schedule") {
         const intent = data.data;
+        // Resolve contact name if recipient isn't a raw address
+        if (publicKey) {
+          const resolved = await resolveRecipient(intent.recipient, publicKey.toBase58());
+          if (!resolved.ok) {
+            appendMessage({ id: crypto.randomUUID(), role: "ai", text: resolved.error, ts: Date.now() });
+            return;
+          }
+          (intent as typeof intent & { recipient: string }).recipient = resolved.address;
+        }
         const res2 = await fetch("/api/schedules", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -488,7 +559,6 @@ export function ChatInterface() {
     if (!prepared || !intent || !publicKey) return;
 
     setPreviewStatus("signing");
-    setOrbStatus("processing");
 
     let signature: string;
     try {
@@ -498,8 +568,6 @@ export function ChatInterface() {
       const msg = err instanceof Error ? err.message : "Transaction rejected.";
       setPreviewError(msg);
       setPreviewStatus("error");
-      setOrbStatus("error");
-      scheduleOrbReset();
       return;
     }
 
@@ -523,15 +591,11 @@ export function ChatInterface() {
       const msg = err instanceof Error ? err.message : "Transaction failed.";
       setPreviewError(msg);
       setPreviewStatus("error");
-      setOrbStatus("error");
-      scheduleOrbReset();
       return;
     }
 
     setPendingSend(null);
     preparedTxRef.current = null;
-    setOrbStatus("confirmed");
-    scheduleOrbReset();
 
     appendMessage({
       id: crypto.randomUUID(),
@@ -554,7 +618,6 @@ export function ChatInterface() {
     if (!prepared || !pendingSwap || !publicKey) return;
 
     setSwapPreviewStatus("signing");
-    setOrbStatus("processing");
 
     let transaction: VersionedTransaction;
     let lastValidBlockHeight: number;
@@ -586,8 +649,6 @@ export function ChatInterface() {
         err instanceof Error ? err.message : "Failed to build swap transaction.";
       setSwapPreviewError(msg);
       setSwapPreviewStatus("error");
-      setOrbStatus("error");
-      scheduleOrbReset();
       return;
     }
 
@@ -599,8 +660,6 @@ export function ChatInterface() {
       const msg = err instanceof Error ? err.message : "Swap rejected.";
       setSwapPreviewError(msg);
       setSwapPreviewStatus("error");
-      setOrbStatus("error");
-      scheduleOrbReset();
       return;
     }
 
@@ -621,8 +680,6 @@ export function ChatInterface() {
       const msg = err instanceof Error ? err.message : "Swap failed.";
       setSwapPreviewError(msg);
       setSwapPreviewStatus("error");
-      setOrbStatus("error");
-      scheduleOrbReset();
       return;
     }
 
@@ -638,8 +695,6 @@ export function ChatInterface() {
 
     setPendingSwap(null);
     preparedSwapRef.current = null;
-    setOrbStatus("confirmed");
-    scheduleOrbReset();
 
     appendMessage({
       id: crypto.randomUUID(),
@@ -656,7 +711,6 @@ export function ChatInterface() {
     if (!prepared || !row || !publicKey) return;
 
     setScheduleExecStatus("signing");
-    setOrbStatus("processing");
 
     let signature: string;
     try {
@@ -666,8 +720,6 @@ export function ChatInterface() {
       const msg = err instanceof Error ? err.message : "Transaction rejected.";
       setScheduleExecError(msg);
       setScheduleExecStatus("error");
-      setOrbStatus("error");
-      scheduleOrbReset();
       return;
     }
 
@@ -687,8 +739,6 @@ export function ChatInterface() {
       const msg = err instanceof Error ? err.message : "Transaction failed.";
       setScheduleExecError(msg);
       setScheduleExecStatus("error");
-      setOrbStatus("error");
-      scheduleOrbReset();
       return;
     }
 
@@ -704,8 +754,6 @@ export function ChatInterface() {
 
     setPendingScheduledExec(null);
     preparedScheduleRef.current = null;
-    setOrbStatus("confirmed");
-    scheduleOrbReset();
     refreshSchedules();
 
     appendMessage({
@@ -769,28 +817,33 @@ export function ChatInterface() {
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto space-y-4 px-1 py-2 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10">
-        {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            scheduledPayments={schedules}
-            schedulesLoading={schedulesLoading}
-            onCancelSchedule={handleCancelSchedule}
-          />
-        ))}
-        {busy && <TypingIndicator />}
-        <div ref={bottomRef} />
+      <div className="relative flex-1 min-h-0">
+        <div className="absolute inset-0 overflow-y-auto space-y-5 px-4 py-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10">
+          {messages.map((msg) => (
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              scheduledPayments={schedules}
+              schedulesLoading={schedulesLoading}
+              onCancelSchedule={handleCancelSchedule}
+              walletPubkey={publicKey?.toBase58() ?? null}
+            />
+          ))}
+          {busy && <TypingIndicator />}
+          <div ref={bottomRef} />
+        </div>
+        {/* Top fade */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-[#080910] to-transparent" />
       </div>
 
       {/* Suggestions */}
       {messages.length <= 1 && !busy && (
-        <div className="flex flex-wrap gap-2 py-3">
+        <div className="flex flex-wrap gap-2 px-4 py-2">
           {SUGGESTIONS.map((s) => (
             <button
               key={s}
               onClick={() => send(s)}
-              className="rounded-full border border-white/8 bg-white/5 px-3 py-1.5 text-xs text-white/50 transition-all hover:border-indigo-500/30 hover:bg-indigo-500/10 hover:text-white/80"
+              className="rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs text-white/50 transition-all hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-indigo-300"
             >
               {s}
             </button>
@@ -799,8 +852,8 @@ export function ChatInterface() {
       )}
 
       {/* Input row */}
-      <div className="relative flex-shrink-0 pt-2">
-        <div className="relative flex items-end gap-2 rounded-2xl border border-white/10 bg-white/5 p-2 backdrop-blur">
+      <div className="relative flex-shrink-0 px-4 pb-4 pt-2">
+        <div className="relative flex items-end gap-2 rounded-2xl border border-white/10 bg-black/50 p-2.5 backdrop-blur-2xl">
           <textarea
             ref={inputRef}
             rows={1}
@@ -817,20 +870,20 @@ export function ChatInterface() {
                 : "Connect wallet to get started…"
             }
             disabled={!connected || busy}
-            className="flex-1 resize-none bg-transparent text-sm text-white placeholder:text-white/25 outline-none py-1.5 px-2 min-h-[36px] max-h-[120px] disabled:opacity-40"
+            className="flex-1 resize-none bg-transparent text-sm text-white/90 placeholder:text-white/25 outline-none py-1.5 px-2 min-h-[36px] max-h-[120px] disabled:opacity-40"
           />
           <ShimmerButton
             onClick={() => send(input)}
             disabled={!input.trim() || busy || !connected}
             shimmerColor="#a5b4fc"
-            background="rgba(99, 102, 241, 0.15)"
+            background="rgba(99, 102, 241, 0.2)"
             borderRadius="12px"
             className="shrink-0 h-9 w-9 p-0 border-indigo-500/20 disabled:opacity-30"
           >
             <SendIcon />
           </ShimmerButton>
           <BorderBeam
-            size={80}
+            size={100}
             duration={6}
             colorFrom="#6366f1"
             colorTo="#a78bfa"
@@ -886,35 +939,47 @@ function MessageBubble({
   scheduledPayments,
   schedulesLoading,
   onCancelSchedule,
+  walletPubkey,
 }: {
   message: Message;
   scheduledPayments: ScheduledPayment[];
   schedulesLoading: boolean;
   onCancelSchedule: (id: string) => void;
+  walletPubkey: string | null;
 }) {
   const isUser = message.role === "user";
   return (
-    <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
+    <div className={cn("flex gap-3 items-start", isUser && "flex-row-reverse")}>
       <div
         className={cn(
-          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold",
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-bold mt-0.5",
           isUser
-            ? "bg-indigo-500/20 text-indigo-300"
-            : "bg-white/8 text-white/60"
+            ? "bg-indigo-500/20 border border-indigo-500/30 text-indigo-300"
+            : "bg-white/[0.06] border border-white/10"
         )}
       >
-        {isUser ? "U" : "AI"}
+        {isUser ? (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="8" r="4" stroke="#818cf8" strokeWidth="1.5" />
+            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke="#818cf8" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L20.5 7V17L12 22L3.5 17V7L12 2Z" stroke="#a78bfa" strokeWidth="1.5" strokeLinejoin="round" />
+            <circle cx="12" cy="12" r="2.5" fill="#a78bfa" />
+          </svg>
+        )}
       </div>
       {message.component === "portfolio" ? (
-        <div className="max-w-[80%] flex-1">
+        <div className="max-w-[85%] flex-1">
           <PortfolioCard />
         </div>
       ) : message.component === "history" ? (
-        <div className="max-w-[80%] flex-1">
+        <div className="max-w-[85%] flex-1">
           <TransactionHistoryCard limit={message.historyLimit ?? 5} />
         </div>
       ) : message.component === "receipt" && message.receipt ? (
-        <div className="max-w-[80%] flex-1">
+        <div className="max-w-[85%] flex-1">
           <ReceiptCard {...message.receipt} />
         </div>
       ) : message.component === "schedules" ? (
@@ -925,13 +990,17 @@ function MessageBubble({
             loading={schedulesLoading}
           />
         </div>
+      ) : message.component === "contacts" ? (
+        <div className="max-w-[90%] flex-1">
+          <ContactsCard walletPubkey={walletPubkey} />
+        </div>
       ) : (
         <div
           className={cn(
-            "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
+            "max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
             isUser
-              ? "rounded-tr-sm bg-indigo-600/20 text-white/90 border border-indigo-500/20"
-              : "rounded-tl-sm bg-white/5 text-white/75 border border-white/8"
+              ? "rounded-tr-none bg-indigo-600/15 text-white/90 border border-indigo-500/20"
+              : "rounded-tl-none bg-white/[0.04] text-white/80 border border-white/[0.07]"
           )}
         >
           {message.text}
@@ -943,15 +1012,18 @@ function MessageBubble({
 
 function TypingIndicator() {
   return (
-    <div className="flex gap-3">
-      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/8 text-xs font-bold text-white/60">
-        AI
+    <div className="flex gap-3 items-start">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] border border-white/10 mt-0.5">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L20.5 7V17L12 22L3.5 17V7L12 2Z" stroke="#a78bfa" strokeWidth="1.5" strokeLinejoin="round" />
+          <circle cx="12" cy="12" r="2.5" fill="#a78bfa" />
+        </svg>
       </div>
-      <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm border border-white/8 bg-white/5 px-4 py-3">
+      <div className="flex items-center gap-1.5 rounded-2xl rounded-tl-none border border-white/[0.07] bg-white/[0.04] px-4 py-3.5">
         {[0, 1, 2].map((i) => (
           <span
             key={i}
-            className="h-1.5 w-1.5 rounded-full bg-indigo-400/60 animate-bounce"
+            className="h-1.5 w-1.5 rounded-full bg-indigo-400/70 animate-bounce"
             style={{ animationDelay: `${i * 150}ms` }}
           />
         ))}
@@ -1005,5 +1077,10 @@ function intentToMessage(intent: Intent): Message {
     case "view_schedules":
     case "cancel_schedule":
       return { ...base, component: "schedules" as const };
+    case "list_contacts":
+      return { ...base, component: "contacts" as const };
+    case "save_contact":
+    case "delete_contact":
+      return { ...base, text: "Processing contact request…" };
   }
 }
