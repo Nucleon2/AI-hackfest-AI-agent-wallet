@@ -27,7 +27,8 @@ import {
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
 import type { JupiterQuote } from "@/lib/jupiterClient";
-import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent } from "@/types/intent";
+import type { Intent, SendIntent, SwapIntent, SaveContactIntent, ListContactsIntent, DeleteContactIntent, MultiStepIntent } from "@/types/intent";
+import { MultiStepPreview, type StepRunStatus } from "@/components/MultiStepPreview";
 import type { ScheduledPayment } from "@/types/schedule";
 import { cn } from "@/lib/utils";
 
@@ -66,7 +67,7 @@ interface Message {
 const WELCOME: Message = {
   id: "welcome",
   role: "ai",
-  text: "Hey! I'm your AI wallet assistant. Connect a Phantom wallet and try:\n\u2022 \"What's my balance?\"\n\u2022 \"Swap 10 USDC for SOL\"\n\u2022 \"Send 0.1 SOL to Alice\" — save contacts first!\n\u2022 \"Save [address] as Alice\"",
+  text: "Hey! I'm your AI wallet assistant. Connect a Phantom wallet and try:\n\u2022 \"What's my balance?\"\n\u2022 \"Swap 10 USDC for SOL\"\n\u2022 \"Send 0.1 SOL to Alice\" — save contacts first!\n\u2022 \"Save [address] as Alice\"\n\u2022 \"Swap 5 USDC to SOL then send it to Alice\" — multi-step!",
   ts: Date.now(),
 };
 
@@ -76,8 +77,15 @@ const SUGGESTIONS = [
   "Show my contacts",
   "Send 0.1 SOL to alice.sol",
   "Show my last 5 transactions",
-  "Send 5 SOL every Friday",
+  "Swap 5 USDC to SOL then send it to Alice",
 ];
+
+interface ResolvedStep {
+  kind: "swap" | "send";
+  swapIntent?: SwapIntent;
+  sendIntent?: SendIntent;
+  chainAmount?: boolean;
+}
 
 interface PreparedTx {
   transaction: VersionedTransaction;
@@ -131,6 +139,16 @@ export function ChatInterface() {
   );
   const [scheduleExecFee, setScheduleExecFee] = useState<number | null>(null);
   const preparedScheduleRef = useRef<PreparedTx | null>(null);
+
+  // --- Multi-step state ---
+  const [pendingMultiStep, setPendingMultiStep] = useState<MultiStepIntent | null>(null);
+  const [multiStepIndex, setMultiStepIndex] = useState(0);
+  const [multiStepStatuses, setMultiStepStatuses] = useState<StepRunStatus[]>([]);
+  const [multiStepError, setMultiStepError] = useState<string | null>(null);
+  const resolvedStepsRef = useRef<ResolvedStep[]>([]);
+  const multiStepAbortRef = useRef(false);
+  const capturedSwapOutRef = useRef<{ outUiAmount: number; toToken: string } | null>(null);
+  const multiStepLastErrorRef = useRef<string | null>(null);
 
   const { schedules, duePayment, loading: schedulesLoading, refresh: refreshSchedules, clearDue } =
     useScheduledPayments(publicKey?.toBase58() ?? null);
@@ -342,20 +360,38 @@ export function ChatInterface() {
     };
   }, [pendingScheduledExec, publicKey, connection]);
 
+  // Sync preflight status into multiStepStatuses array
+  useEffect(() => {
+    if (!pendingMultiStep) return;
+    const step = resolvedStepsRef.current[multiStepIndex];
+    if (!step) return;
+    const rawStatus = step.kind === "swap" ? swapPreviewStatus : previewStatus;
+    setMultiStepStatuses((prev) => {
+      const next = [...prev];
+      const cur = next[multiStepIndex];
+      if (cur === "building" && rawStatus === "ready") next[multiStepIndex] = "ready";
+      if (cur === "building" && rawStatus === "error") next[multiStepIndex] = "error";
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swapPreviewStatus, previewStatus, multiStepIndex, pendingMultiStep]);
+
   // Auto-approve: fire confirm handlers as soon as preflight reaches "ready"
   useEffect(() => {
+    if (pendingMultiStep) return; // multi-step has its own auto-approve below
     if (autoApprove && previewStatus === "ready" && pendingSend) {
       handleConfirmSend();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, previewStatus, pendingSend]);
+  }, [autoApprove, previewStatus, pendingSend, pendingMultiStep]);
 
   useEffect(() => {
+    if (pendingMultiStep) return;
     if (autoApprove && swapPreviewStatus === "ready" && pendingSwap) {
       handleConfirmSwap();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, swapPreviewStatus, pendingSwap]);
+  }, [autoApprove, swapPreviewStatus, pendingSwap, pendingMultiStep]);
 
   useEffect(() => {
     if (autoApprove && scheduleExecStatus === "ready" && pendingScheduledExec) {
@@ -363,6 +399,17 @@ export function ChatInterface() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoApprove, scheduleExecStatus, pendingScheduledExec]);
+
+  // Auto-approve for multi-step
+  useEffect(() => {
+    if (!pendingMultiStep || !autoApprove) return;
+    const step = resolvedStepsRef.current[multiStepIndex];
+    if (!step) return;
+    const currentStatus = multiStepStatuses[multiStepIndex];
+    if (currentStatus !== "ready") return;
+    handleMultiStepConfirmCurrent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoApprove, multiStepStatuses, multiStepIndex, pendingMultiStep]);
 
   function appendMessage(msg: Message) {
     setMessages((prev) => [...prev, msg]);
@@ -543,6 +590,15 @@ export function ChatInterface() {
           component: "schedules",
           ts: Date.now(),
         });
+      } else if (data.data.action === "multi_step") {
+        const msIntent = data.data as MultiStepIntent;
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: `Starting multi-step: ${msIntent.description}`,
+          ts: Date.now(),
+        });
+        await executeMultiStep(msIntent);
       } else {
         appendMessage(intentToMessage(data.data));
       }
@@ -579,10 +635,10 @@ export function ChatInterface() {
     });
   }
 
-  async function handleConfirmSend() {
+  async function handleConfirmSend(): Promise<boolean> {
     const prepared = preparedTxRef.current;
     const intent = pendingSend;
-    if (!prepared || !intent || !publicKey) return;
+    if (!prepared || !intent || !publicKey) return false;
 
     setPreviewStatus("signing");
 
@@ -592,9 +648,10 @@ export function ChatInterface() {
       setPreviewStatus("confirming");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Transaction rejected.";
+      multiStepLastErrorRef.current = msg;
       setPreviewError(msg);
       setPreviewStatus("error");
-      return;
+      return false;
     }
 
     try {
@@ -615,9 +672,10 @@ export function ChatInterface() {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Transaction failed.";
+      multiStepLastErrorRef.current = msg;
       setPreviewError(msg);
       setPreviewStatus("error");
-      return;
+      return false;
     }
 
     setPendingSend(null);
@@ -637,11 +695,12 @@ export function ChatInterface() {
       },
       ts: Date.now(),
     });
+    return true;
   }
 
-  async function handleConfirmSwap() {
+  async function handleConfirmSwap(): Promise<boolean> {
     const prepared = preparedSwapRef.current;
-    if (!prepared || !pendingSwap || !publicKey) return;
+    if (!prepared || !pendingSwap || !publicKey) return false;
 
     setSwapPreviewStatus("signing");
 
@@ -673,9 +732,10 @@ export function ChatInterface() {
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : "Failed to build swap transaction.";
+      multiStepLastErrorRef.current = msg;
       setSwapPreviewError(msg);
       setSwapPreviewStatus("error");
-      return;
+      return false;
     }
 
     let signature: string;
@@ -684,9 +744,10 @@ export function ChatInterface() {
       setSwapPreviewStatus("confirming");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Swap rejected.";
+      multiStepLastErrorRef.current = msg;
       setSwapPreviewError(msg);
       setSwapPreviewStatus("error");
-      return;
+      return false;
     }
 
     try {
@@ -704,9 +765,10 @@ export function ChatInterface() {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Swap failed.";
+      multiStepLastErrorRef.current = msg;
       setSwapPreviewError(msg);
       setSwapPreviewStatus("error");
-      return;
+      return false;
     }
 
     const receipt: ReceiptPayload = {
@@ -729,6 +791,7 @@ export function ChatInterface() {
       receipt,
       ts: Date.now(),
     });
+    return true;
   }
 
   async function handleConfirmScheduledExec() {
@@ -833,6 +896,154 @@ export function ChatInterface() {
     }
   }
 
+  // --- Multi-step helpers ---
+
+  function updateStepStatus(index: number, status: StepRunStatus) {
+    setMultiStepStatuses((prev) => {
+      const next = [...prev];
+      next[index] = status;
+      return next;
+    });
+  }
+
+  function startStep(index: number) {
+    setMultiStepIndex(index);
+    updateStepStatus(index, "building");
+    const step = resolvedStepsRef.current[index];
+    if (!step) return;
+    if (step.kind === "swap") setPendingSwap(step.swapIntent!);
+    else setPendingSend(step.sendIntent!);
+  }
+
+  async function handleMultiStepConfirmCurrent() {
+    const index = multiStepIndex;
+    const step = resolvedStepsRef.current[index];
+    if (!step) return;
+
+    multiStepLastErrorRef.current = null;
+    updateStepStatus(index, "signing");
+
+    let success: boolean;
+    if (step.kind === "swap") {
+      // Capture outAmount before handleConfirmSwap clears preparedSwapRef
+      if (preparedSwapRef.current) {
+        capturedSwapOutRef.current = {
+          outUiAmount: preparedSwapRef.current.outUiAmount,
+          toToken: preparedSwapRef.current.toSymbol,
+        };
+      }
+      success = await handleConfirmSwap();
+    } else {
+      success = await handleConfirmSend();
+    }
+
+    if (multiStepAbortRef.current) return;
+
+    if (!success) {
+      updateStepStatus(index, "error");
+      setMultiStepError(multiStepLastErrorRef.current ?? "Step failed.");
+      return;
+    }
+
+    updateStepStatus(index, "done");
+
+    const nextIndex = index + 1;
+    if (nextIndex >= resolvedStepsRef.current.length) {
+      setPendingMultiStep(null);
+      appendMessage({
+        id: crypto.randomUUID(),
+        role: "ai",
+        text: `All ${resolvedStepsRef.current.length} steps completed successfully.`,
+        ts: Date.now(),
+      });
+      return;
+    }
+
+    // Chain swap output to next send step if needed
+    const nextStep = resolvedStepsRef.current[nextIndex];
+    if (nextStep.chainAmount && capturedSwapOutRef.current) {
+      nextStep.sendIntent = {
+        ...nextStep.sendIntent!,
+        amount: capturedSwapOutRef.current.outUiAmount,
+        token: capturedSwapOutRef.current.toToken,
+      };
+      capturedSwapOutRef.current = null;
+    }
+
+    startStep(nextIndex);
+  }
+
+  function handleCancelMultiStep() {
+    const activeStatus = multiStepStatuses[multiStepIndex];
+    if (activeStatus === "signing" || activeStatus === "confirming") return;
+    multiStepAbortRef.current = true;
+    setPendingMultiStep(null);
+    setPendingSend(null);
+    setPendingSwap(null);
+    preparedTxRef.current = null;
+    preparedSwapRef.current = null;
+    capturedSwapOutRef.current = null;
+    resolvedStepsRef.current = [];
+    appendMessage({
+      id: crypto.randomUUID(),
+      role: "ai",
+      text: "Multi-step command cancelled. No transactions were sent.",
+      ts: Date.now(),
+    });
+  }
+
+  async function executeMultiStep(intent: MultiStepIntent) {
+    if (!publicKey) {
+      appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet to execute multi-step commands.", ts: Date.now() });
+      return;
+    }
+
+    multiStepAbortRef.current = false;
+
+    // Phase 1: resolve all send recipients up-front before showing any UI
+    const resolved: ResolvedStep[] = [];
+    for (const step of intent.steps) {
+      if (step.type === "send") {
+        const r = await resolveRecipient(step.recipient, publicKey.toBase58());
+        if (!r.ok) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: r.error, ts: Date.now() });
+          return;
+        }
+        resolved.push({
+          kind: "send",
+          sendIntent: {
+            action: "send",
+            amount: step.amount ?? 0,
+            token: step.token,
+            recipient: r.address,
+            memo: step.memo,
+          },
+          chainAmount: step.amount === null,
+        });
+      } else {
+        resolved.push({
+          kind: "swap",
+          swapIntent: {
+            action: "swap",
+            fromToken: step.fromToken,
+            toToken: step.toToken,
+            amount: step.amount,
+            slippageBps: step.slippageBps ?? 50,
+          },
+        });
+      }
+    }
+
+    resolvedStepsRef.current = resolved;
+
+    // Phase 2: show preview and kick off step 0
+    setMultiStepError(null);
+    setMultiStepStatuses(resolved.map(() => "pending" as StepRunStatus));
+    setPendingMultiStep(intent);
+    setMultiStepIndex(0);
+    startStep(0);
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -901,12 +1112,12 @@ export function ChatInterface() {
                 ? "Ask anything about your wallet…"
                 : "Connect wallet to get started…"
             }
-            disabled={!connected || busy}
+            disabled={!connected || busy || !!pendingMultiStep}
             className="flex-1 resize-none bg-transparent text-sm text-white/90 placeholder:text-white/25 outline-none py-1.5 px-2 min-h-[36px] max-h-[120px] disabled:opacity-40"
           />
           <ShimmerButton
             onClick={() => send(input)}
-            disabled={!input.trim() || busy || !connected}
+            disabled={!input.trim() || busy || !connected || !!pendingMultiStep}
             shimmerColor="#a5b4fc"
             background="rgba(99, 102, 241, 0.2)"
             borderRadius="12px"
@@ -927,7 +1138,19 @@ export function ChatInterface() {
         </p>
       </div>
 
-      {pendingSend ? (
+      {pendingMultiStep ? (
+        <MultiStepPreview
+          intent={pendingMultiStep}
+          statuses={multiStepStatuses}
+          currentIndex={multiStepIndex}
+          errorMessage={multiStepError}
+          swapQuote={resolvedStepsRef.current[multiStepIndex]?.kind === "swap" ? swapQuoteDisplay : null}
+          sendFeeLamports={resolvedStepsRef.current[multiStepIndex]?.kind === "send" ? previewFeeLamports : null}
+          resolvedRecipient={resolvedStepsRef.current[multiStepIndex]?.kind === "send" ? previewRecipientPubkey : null}
+          onConfirmStep={handleMultiStepConfirmCurrent}
+          onCancel={handleCancelMultiStep}
+        />
+      ) : pendingSend ? (
         <TransactionPreview
           intent={pendingSend}
           status={previewStatus}
@@ -1114,5 +1337,7 @@ function intentToMessage(intent: Intent): Message {
     case "save_contact":
     case "delete_contact":
       return { ...base, text: "Processing contact request…" };
+    case "multi_step":
+      return { ...base, text: `Starting multi-step: ${intent.description}` };
   }
 }
