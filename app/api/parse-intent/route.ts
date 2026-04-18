@@ -11,7 +11,7 @@ Your ONLY job is to convert the user's natural language message into a structure
 
 Rules:
 - Always respond with valid JSON only. No markdown, no explanation, no preamble.
-- Supported actions: "send", "swap", "balance", "history", "unknown", "schedule", "view_schedules", "cancel_schedule", "save_contact", "list_contacts", "delete_contact", "set_portfolio", "view_portfolio", "pause_portfolio", "resume_portfolio", "set_drift_threshold"
+- Supported actions: "send", "swap", "balance", "history", "unknown", "schedule", "view_schedules", "cancel_schedule", "save_contact", "list_contacts", "delete_contact", "set_portfolio", "view_portfolio", "pause_portfolio", "resume_portfolio", "set_drift_threshold", "explain_tx", "spending_insights"
 - For "send": extract amount (number), token (string, uppercase), recipient (string). If recipient looks like a contact name (not a valid Solana base58 address), still include it as-is — the frontend will resolve it against the address book.
 - For "swap": extract fromToken, toToken, amount. Default slippageBps to 50 if not specified.
 - For "balance": if the user asks about a specific token, include it. Otherwise omit token field.
@@ -121,6 +121,20 @@ Examples:
        { "type": "swap", "fromToken": "USDC", "toToken": "SOL", "amount": 10, "slippageBps": 50 },
        { "type": "send", "amount": 0.5, "token": "SOL", "recipient": "Bob", "memo": null }
      ]}
+
+For "explain_tx": user wants a plain-English explanation of a specific Solana transaction.
+  Triggers: "explain this tx: [sig]", "explain tx [sig]", "what did this transaction do: [sig]", "what happened in [sig]", "decode [sig]".
+  Extract: signature (the base58 transaction hash, usually 64-128 chars long).
+  If the user refers to a transaction without giving a signature (e.g. "explain the last tx"), return action "unknown" with a clarification asking them to paste the signature.
+  Examples:
+    "explain this tx: 5Kj3abcXYZ..."
+      -> { "action": "explain_tx", "signature": "5Kj3abcXYZ..." }
+    "what did this transaction do: 4Hm..."
+      -> { "action": "explain_tx", "signature": "4Hm..." }
+
+For "spending_insights": user wants an analysis of how they've been spending / what their recent activity looks like.
+  Triggers: "how am I spending my SOL?", "give me a spending breakdown", "spending analysis", "show my spending", "spending insights", "where is my SOL going?", "analyze my transactions".
+  -> { "action": "spending_insights" }
 
 Wallet context will be provided in the user message. Use it to resolve relative amounts like "half my SOL".`;
 
@@ -239,7 +253,13 @@ export async function POST(req: NextRequest) {
     response = await client.messages.create({
       model: MODEL,
       max_tokens: 768,
-      system: SYSTEM_PROMPT,
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
       messages: buildClaudeMessages(
         conversationHistory,
         buildUserMessage(message, walletContext)
