@@ -194,10 +194,14 @@ function AlertRow({
   const isClose = pctAway !== null && Math.abs(pctAway) < 5;
 
   const swapDesc =
-    (alert.action_type ?? "notify") === "swap"
-      ? alert.swap_amount_pct
+    (alert.action_type ?? "notify") === "swap" &&
+    alert.swap_from_token != null &&
+    alert.swap_to_token != null
+      ? alert.swap_amount_pct != null
         ? `Swap ${alert.swap_amount_pct}% ${alert.swap_from_token} → ${alert.swap_to_token}`
-        : `Swap $${alert.swap_amount_fixed} ${alert.swap_from_token} → ${alert.swap_to_token}`
+        : alert.swap_amount_fixed != null
+          ? `Swap $${alert.swap_amount_fixed} worth of ${alert.swap_from_token} → ${alert.swap_to_token}`
+          : null
       : null;
 
   return (

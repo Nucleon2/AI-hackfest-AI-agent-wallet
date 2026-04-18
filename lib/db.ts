@@ -140,7 +140,13 @@ export function getDb(): Database.Database {
       ON threat_log (wallet_pubkey, created_at DESC);
   `);
 
-  // Migration: extend price_alerts with smart-alert (stop-loss / take-profit) columns
+  // Migration: extend price_alerts with smart-alert (stop-loss / take-profit) columns.
+  // Use PRAGMA to check existing columns so we never hit an ALTER TABLE error at all.
+  const existingCols = new Set(
+    (_db.prepare("PRAGMA table_info(price_alerts)").all() as { name: string }[]).map(
+      (r) => r.name
+    )
+  );
   const migrateColumns: [string, string][] = [
     ["action_type",       "TEXT NOT NULL DEFAULT 'notify'"],
     ["swap_from_token",   "TEXT"],
@@ -150,8 +156,9 @@ export function getDb(): Database.Database {
     ["label",             "TEXT"],
   ];
   for (const [col, def] of migrateColumns) {
-    try { _db.exec(`ALTER TABLE price_alerts ADD COLUMN ${col} ${def}`); }
-    catch { /* column already exists — safe to ignore */ }
+    if (!existingCols.has(col)) {
+      _db.exec(`ALTER TABLE price_alerts ADD COLUMN ${col} ${def}`);
+    }
   }
 
   return _db;

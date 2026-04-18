@@ -455,9 +455,43 @@ export function ChatInterface() {
 
       const fromToken = alert.swap_from_token ?? alert.token;
       const toToken = alert.swap_to_token ?? "USDC";
-      const amtDesc = alert.swap_amount_pct
+      const isStablecoin = (t: string) => t === "USDC" || t === "USDT";
+
+      // Resolve fromToken UI amount:
+      //   pct-based: we only reliably have the SOL balance client-side;
+      //     for non-SOL fromToken (e.g. USDC dip-buy), skip auto-queue.
+      //   fixed USD: convert USD → fromToken units via currentPrice.
+      //     If fromToken is a stablecoin, USD ≈ fromToken (1:1).
+      //     Otherwise divide by currentPrice (the watched token's price).
+      let fromAmount: number | null = null;
+      if (alert.swap_amount_pct != null) {
+        if (fromToken === "SOL") {
+          fromAmount = ((balance ?? 0) * alert.swap_amount_pct) / 100;
+        }
+        // For non-SOL pct-based alerts we don't have the SPL balance — skip auto-queue
+      } else if (alert.swap_amount_fixed != null) {
+        const usdAmount = alert.swap_amount_fixed;
+        if (isStablecoin(fromToken)) {
+          fromAmount = usdAmount; // USDC/USDT 1:1 with USD
+        } else if (currentPrice > 0) {
+          fromAmount = usdAmount / currentPrice; // USD → fromToken units
+        }
+        // currentPrice <= 0 leaves fromAmount null → graceful fallback below
+      }
+
+      const amtDesc = alert.swap_amount_pct != null
         ? `${alert.swap_amount_pct}% of your ${fromToken}`
-        : `$${alert.swap_amount_fixed} of ${fromToken}`;
+        : `$${alert.swap_amount_fixed} worth of ${fromToken}`;
+
+      if (fromAmount == null) {
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: `Price alert hit! ${alert.token} reached ${priceStr}. Open your wallet to manually swap ${amtDesc} → ${toToken} (balance unavailable for auto-execute).`,
+          ts: Date.now(),
+        });
+        return;
+      }
 
       appendMessage({
         id: crypto.randomUUID(),
@@ -465,11 +499,6 @@ export function ChatInterface() {
         text: `Price alert hit! ${alert.token} reached ${priceStr}. Queuing swap: ${amtDesc} → ${toToken}.`,
         ts: Date.now(),
       });
-
-      // Resolve swap amount: pct-based uses current SOL balance; fixed uses USD value
-      const fromAmount = alert.swap_amount_pct
-        ? ((balance ?? 0) * alert.swap_amount_pct) / 100
-        : alert.swap_amount_fixed ?? 0;
 
       setPendingSwap({
         action: "swap",

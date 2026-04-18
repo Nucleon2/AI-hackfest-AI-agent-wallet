@@ -443,16 +443,26 @@ export function isIntent(value: unknown): value is Intent {
       return true;
     case "cancel_dca":
       return typeof value.id === "string";
-    case "price_alert":
-      return (
-        typeof value.token === "string" &&
-        typeof value.targetPrice === "number" &&
-        value.targetPrice > 0 &&
-        (value.direction === "above" || value.direction === "below") &&
-        (value.action_type === undefined ||
-          value.action_type === "notify" ||
-          value.action_type === "swap")
-      );
+    case "price_alert": {
+      if (
+        typeof value.token !== "string" ||
+        typeof value.targetPrice !== "number" ||
+        value.targetPrice <= 0 ||
+        (value.direction !== "above" && value.direction !== "below")
+      ) return false;
+      const at = value.action_type;
+      if (at !== undefined && at !== "notify" && at !== "swap") return false;
+      if (at === "swap") {
+        if (typeof value.swap_from_token !== "string") return false;
+        if (typeof value.swap_to_token !== "string") return false;
+        const hasPct = value.swap_amount_pct != null;
+        const hasFixed = value.swap_amount_fixed != null;
+        if (hasPct === hasFixed) return false; // must have exactly one
+        if (hasPct && (typeof value.swap_amount_pct !== "number" || (value.swap_amount_pct as number) <= 0 || (value.swap_amount_pct as number) > 100)) return false;
+        if (hasFixed && (typeof value.swap_amount_fixed !== "number" || (value.swap_amount_fixed as number) <= 0)) return false;
+      }
+      return true;
+    }
     case "view_alerts":
       return true;
     case "cancel_alert":
