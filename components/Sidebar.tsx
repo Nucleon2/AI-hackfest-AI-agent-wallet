@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { PortfolioConfig, DCAOrder, PriceAlert } from "@/types/intent";
+import type { PortfolioConfig } from "@/types/intent";
+import { useDCAStore } from "@/lib/stores/dcaStore";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletBalance } from "@/hooks/useWalletBalance";
 import { useChatSessionStore } from "@/lib/stores/chatSessionStore";
@@ -31,8 +32,10 @@ export function Sidebar() {
   const { sessions, activeSessionId, setActiveSessionId } = useChatSessionStore();
   const { createSession, deleteSession } = useChatSessions(publicKey?.toBase58() ?? null);
   const [portfolioConfig, setPortfolioConfig] = useState<PortfolioConfig | null>(null);
-  const [dcaCount, setDcaCount] = useState(0);
-  const [alertCount, setAlertCount] = useState(0);
+  // Counts are populated by useDCAManager (mounted in ChatInterface) so we
+  // don't spin up a duplicate polling loop here.
+  const dcaCount = useDCAStore((s) => s.dcaCount);
+  const alertCount = useDCAStore((s) => s.alertCount);
 
   useEffect(() => {
     if (!publicKey) { setPortfolioConfig(null); return; }
@@ -42,32 +45,6 @@ export function Sidebar() {
         if (json.success) setPortfolioConfig(json.data ?? null);
       })
       .catch(() => {});
-  }, [publicKey]);
-
-  useEffect(() => {
-    if (!publicKey) {
-      setDcaCount(0);
-      setAlertCount(0);
-      return;
-    }
-    const wallet = publicKey.toBase58();
-    const refresh = () => {
-      fetch(`/api/dca?wallet=${wallet}`)
-        .then((r) => r.json())
-        .then((json: { success: boolean; data?: DCAOrder[] }) => {
-          if (json.success) setDcaCount(json.data?.length ?? 0);
-        })
-        .catch(() => {});
-      fetch(`/api/price-alerts?wallet=${wallet}`)
-        .then((r) => r.json())
-        .then((json: { success: boolean; data?: PriceAlert[] }) => {
-          if (json.success) setAlertCount(json.data?.length ?? 0);
-        })
-        .catch(() => {});
-    };
-    refresh();
-    const interval = setInterval(refresh, 30_000);
-    return () => clearInterval(interval);
   }, [publicKey]);
 
   const shortAddress = publicKey

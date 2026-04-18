@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DCAOrder, PriceAlert } from "@/types/intent";
+import { useDCAStore } from "@/lib/stores/dcaStore";
 
 export interface TriggeredAlert {
   alert: PriceAlert;
@@ -43,10 +44,14 @@ export function useDCAManager(
   const onAlertRef = useRef(onAlertTriggered);
   onAlertRef.current = onAlertTriggered;
 
+  const setStoreCounts = useDCAStore((s) => s.setCounts);
+  const resetStore = useDCAStore((s) => s.reset);
+
   const refresh = useCallback(async () => {
     if (!walletPubkey) {
       setOrders([]);
       setAlerts([]);
+      resetStore();
       return;
     }
     setLoading(true);
@@ -132,11 +137,18 @@ export function useDCAManager(
     }
   }, [walletPubkey, refresh]);
 
+  // Publish counts to the store so sibling UI (e.g. Sidebar) can read them
+  // without spinning up a second polling loop.
+  useEffect(() => {
+    setStoreCounts(orders.length, alerts.length);
+  }, [orders.length, alerts.length, setStoreCounts]);
+
   useEffect(() => {
     if (!walletPubkey) {
       setOrders([]);
       setAlerts([]);
       setDueOrder(null);
+      resetStore();
       return;
     }
     refresh();
@@ -149,7 +161,7 @@ export function useDCAManager(
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [walletPubkey, refresh, pollDue, pollAlerts]);
+  }, [walletPubkey, refresh, pollDue, pollAlerts, resetStore]);
 
   const cancelOrder = useCallback(
     async (id: string): Promise<boolean> => {
