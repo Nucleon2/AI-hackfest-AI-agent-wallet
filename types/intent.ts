@@ -24,7 +24,9 @@ export type IntentAction =
   | "dca"
   | "view_dca"
   | "cancel_dca"
-  | "price_alert";
+  | "price_alert"
+  | "view_alerts"
+  | "cancel_alert";
 
 export type StakingProvider = "marinade" | "jito";
 
@@ -244,6 +246,21 @@ export interface PriceAlertIntent {
   token: string;
   targetPrice: number;
   direction: "above" | "below";
+  action_type?: "notify" | "swap";
+  swap_from_token?: string;
+  swap_to_token?: string;
+  swap_amount_pct?: number;   // 0–100
+  swap_amount_fixed?: number; // USD
+  label?: string;
+}
+
+export interface ViewAlertsIntent {
+  action: "view_alerts";
+}
+
+export interface CancelAlertIntent {
+  action: "cancel_alert";
+  alert_id?: string;
 }
 
 export interface DCAOrder {
@@ -271,6 +288,12 @@ export interface PriceAlert {
   is_triggered: number;
   created_at: number;
   triggered_at: number | null;
+  action_type: "notify" | "swap";
+  swap_from_token: string | null;
+  swap_to_token: string | null;
+  swap_amount_pct: number | null;
+  swap_amount_fixed: number | null;
+  label: string | null;
 }
 
 export type Intent =
@@ -299,7 +322,9 @@ export type Intent =
   | DCAIntent
   | ViewDCAIntent
   | CancelDCAIntent
-  | PriceAlertIntent;
+  | PriceAlertIntent
+  | ViewAlertsIntent
+  | CancelAlertIntent;
 
 export interface WalletContext {
   publicKey?: string;
@@ -418,13 +443,30 @@ export function isIntent(value: unknown): value is Intent {
       return true;
     case "cancel_dca":
       return typeof value.id === "string";
-    case "price_alert":
-      return (
-        typeof value.token === "string" &&
-        typeof value.targetPrice === "number" &&
-        value.targetPrice > 0 &&
-        (value.direction === "above" || value.direction === "below")
-      );
+    case "price_alert": {
+      if (
+        typeof value.token !== "string" ||
+        typeof value.targetPrice !== "number" ||
+        value.targetPrice <= 0 ||
+        (value.direction !== "above" && value.direction !== "below")
+      ) return false;
+      const at = value.action_type;
+      if (at !== undefined && at !== "notify" && at !== "swap") return false;
+      if (at === "swap") {
+        if (typeof value.swap_from_token !== "string") return false;
+        if (typeof value.swap_to_token !== "string") return false;
+        const hasPct = value.swap_amount_pct != null;
+        const hasFixed = value.swap_amount_fixed != null;
+        if (hasPct === hasFixed) return false; // must have exactly one
+        if (hasPct && (typeof value.swap_amount_pct !== "number" || (value.swap_amount_pct as number) <= 0 || (value.swap_amount_pct as number) > 100)) return false;
+        if (hasFixed && (typeof value.swap_amount_fixed !== "number" || (value.swap_amount_fixed as number) <= 0)) return false;
+      }
+      return true;
+    }
+    case "view_alerts":
+      return true;
+    case "cancel_alert":
+      return value.alert_id === undefined || typeof value.alert_id === "string";
     default:
       return false;
   }

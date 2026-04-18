@@ -34,6 +34,7 @@ import {
   validateRecipient,
 } from "@/lib/transactionBuilder";
 import { SOLANA_NETWORK, type SolanaNetwork } from "@/lib/solanaClient";
+import { fetchTokenUiBalance } from "@/lib/splBalance";
 import type { JupiterQuote } from "@/lib/jupiterClient";
 import type {
   Intent,
@@ -52,6 +53,8 @@ import type {
   DCAIntent,
   CancelDCAIntent,
   PriceAlertIntent,
+  ViewAlertsIntent,
+  CancelAlertIntent,
   DCAOrder,
   PriceAlert,
 } from "@/types/intent";
@@ -430,22 +433,95 @@ export function ChatInterface() {
 
   // --- DCA manager ---
   const handleAlertTriggered = useCallback(
-    ({ alert, currentPrice }: { alert: PriceAlert; currentPrice: number }) => {
+    async ({
+      alert,
+      currentPrice,
+      needsSwap,
+    }: {
+      alert: PriceAlert;
+      currentPrice: number;
+      needsSwap: boolean;
+    }) => {
+      const priceStr = `$${currentPrice.toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
+
+      if (!needsSwap) {
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: `Alert! ${alert.token} is now at ${priceStr} — hit your ${alert.direction === "above" ? "upper" : "lower"} target of $${alert.target_price}.`,
+          ts: Date.now(),
+        });
+        return;
+      }
+
+      const fromToken = alert.swap_from_token ?? alert.token;
+      const toToken = alert.swap_to_token ?? "USDC";
+      const isStablecoin = (t: string) => t === "USDC" || t === "USDT";
+
+      // Resolve fromToken UI amount:
+      //   pct-based: fetch the fromToken balance (SOL from cache, SPL via RPC).
+      //   fixed USD: convert USD → fromToken units via currentPrice, or 1:1 for
+      //   stablecoins. currentPrice <= 0 leaves fromAmount null → graceful fallback.
+      let fromAmount: number | null = null;
+      if (alert.swap_amount_pct != null) {
+        if (publicKey) {
+          const fromBalance = await fetchTokenUiBalance(
+            connection,
+            publicKey,
+            fromToken,
+            fromToken === "SOL" ? balance : null
+          );
+          if (fromBalance != null && fromBalance > 0) {
+            fromAmount = (fromBalance * alert.swap_amount_pct) / 100;
+          }
+        }
+      } else if (alert.swap_amount_fixed != null) {
+        const usdAmount = alert.swap_amount_fixed;
+        if (isStablecoin(fromToken)) {
+          fromAmount = usdAmount;
+        } else if (currentPrice > 0) {
+          fromAmount = usdAmount / currentPrice;
+        }
+      }
+
+      const amtDesc = alert.swap_amount_pct != null
+        ? `${alert.swap_amount_pct}% of your ${fromToken}`
+        : `$${alert.swap_amount_fixed} worth of ${fromToken}`;
+
+      if (fromAmount == null || fromAmount <= 0) {
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: `Price alert hit! ${alert.token} reached ${priceStr}. Couldn't auto-execute ${amtDesc} → ${toToken} — balance unavailable or zero.`,
+          ts: Date.now(),
+        });
+        return;
+      }
+
       appendMessage({
         id: crypto.randomUUID(),
         role: "ai",
-        text: `${alert.token} just crossed ${alert.direction} $${alert.target_price} — current price $${currentPrice.toFixed(2)}.`,
+        text: `Price alert hit! ${alert.token} reached ${priceStr}. Queuing swap: ${amtDesc} → ${toToken}.`,
         ts: Date.now(),
       });
+
+      setPendingSwap({
+        action: "swap",
+        fromToken,
+        toToken,
+        amount: fromAmount,
+        slippageBps: 100,
+      });
     },
-    // appendMessage is stable — defined below
+    // appendMessage and setPendingSwap are stable refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+    [balance, connection, publicKey]
   );
 
   const {
     orders: dcaOrders,
     alerts: priceAlerts,
+    alertPrices,
     dueOrder: dueDCAOrder,
     loading: dcaLoading,
     refresh: refreshDCA,
@@ -1370,15 +1446,40 @@ export function ChatInterface() {
             | { success: false; error?: string };
           if (json2.success) {
             await refreshDCA();
+            const confirmText =
+              intent.action_type === "swap"
+                ? `Set. I'll watch ${intent.token} and automatically swap ${
+                    intent.swap_amount_pct
+                      ? `${intent.swap_amount_pct}% of your ${intent.swap_from_token}`
+                      : `$${intent.swap_amount_fixed} of ${intent.swap_from_token}`
+                  } → ${intent.swap_to_token} when it goes ${intent.direction} $${intent.targetPrice}.`
+                : `Got it. I'll alert you when ${intent.token} goes ${intent.direction} $${intent.targetPrice}.`;
             appendMessage({
               id: crypto.randomUUID(),
               role: "ai",
-              text: `I'll watch ${intent.token} and ping you when it goes ${intent.direction} $${intent.targetPrice}.`,
+              text: confirmText,
               ts: Date.now(),
             });
           } else {
             appendMessage({ id: crypto.randomUUID(), role: "ai", text: json2.error ?? "Failed to create alert.", ts: Date.now() });
           }
+        }
+      } else if (data.data.action === "view_alerts") {
+        appendMessage({ id: crypto.randomUUID(), role: "ai", component: "dca_manager", ts: Date.now() });
+      } else if (data.data.action === "cancel_alert") {
+        const intent = data.data as CancelAlertIntent;
+        if (!publicKey) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", text: "Connect your wallet first.", ts: Date.now() });
+        } else if (!intent.alert_id) {
+          appendMessage({ id: crypto.randomUUID(), role: "ai", component: "dca_manager", ts: Date.now() });
+        } else {
+          const ok = await deletePriceAlert(intent.alert_id);
+          appendMessage({
+            id: crypto.randomUUID(),
+            role: "ai",
+            text: ok ? "Alert cancelled." : "Couldn't find that alert.",
+            ts: Date.now(),
+          });
         }
       } else if (data.data.action === "multi_step") {
         const msIntent = data.data as MultiStepIntent;
@@ -2109,6 +2210,7 @@ export function ChatInterface() {
               onUnstakeRequest={requestUnstake}
               dcaOrders={dcaOrders}
               priceAlerts={priceAlerts}
+              alertPrices={alertPrices}
               dcaLoading={dcaLoading}
               dcaNetworkWarning={
                 SOLANA_NETWORK !== "mainnet-beta"
@@ -2287,6 +2389,7 @@ function MessageBubble({
   onUnstakeRequest,
   dcaOrders,
   priceAlerts,
+  alertPrices,
   dcaLoading,
   dcaNetworkWarning,
   onCancelDCA,
@@ -2311,6 +2414,7 @@ function MessageBubble({
   onUnstakeRequest: (provider: StakingProvider, amount: number) => void;
   dcaOrders: DCAOrder[];
   priceAlerts: PriceAlert[];
+  alertPrices: Record<string, number>;
   dcaLoading: boolean;
   dcaNetworkWarning: string | null;
   onCancelDCA: (id: string) => void;
@@ -2396,6 +2500,7 @@ function MessageBubble({
           <DCACard
             orders={dcaOrders}
             alerts={priceAlerts}
+            alertPrices={alertPrices}
             onCancelOrder={onCancelDCA}
             onDeleteAlert={onDeleteAlert}
             loading={dcaLoading}
@@ -2515,5 +2620,8 @@ function intentToMessage(intent: Intent): Message {
       return { ...base, component: "dca_manager" as const };
     case "price_alert":
       return { ...base, text: `Alert created: ${intent.token} ${intent.direction} $${intent.targetPrice}.` };
+    case "view_alerts":
+    case "cancel_alert":
+      return { ...base, component: "dca_manager" as const };
   }
 }

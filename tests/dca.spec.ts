@@ -155,4 +155,180 @@ test.describe("Price alerts API", () => {
     expect(json.data?.direction).toBe("below");
     expect(json.data?.targetPrice).toBe(150);
   });
+
+  test("creates a swap-type (stop-loss) alert and stores all swap fields", async ({ request }) => {
+    const create = await request.post(`${BASE_URL}/api/price-alerts`, {
+      data: {
+        walletPubkey: TEST_WALLET,
+        intent: {
+          action: "price_alert",
+          token: "SOL",
+          targetPrice: 100,
+          direction: "below",
+          action_type: "swap",
+          swap_from_token: "SOL",
+          swap_to_token: "USDC",
+          swap_amount_pct: 50,
+          label: "Stop-loss: sell 50% SOL below $100",
+        },
+      },
+    });
+    const json = (await create.json()) as {
+      success: boolean;
+      data?: {
+        id: string;
+        action_type: string;
+        swap_from_token: string;
+        swap_to_token: string;
+        swap_amount_pct: number;
+        swap_amount_fixed: number | null;
+        label: string;
+      };
+    };
+    expect(json.success).toBe(true);
+    expect(json.data?.action_type).toBe("swap");
+    expect(json.data?.swap_from_token).toBe("SOL");
+    expect(json.data?.swap_to_token).toBe("USDC");
+    expect(json.data?.swap_amount_pct).toBe(50);
+    expect(json.data?.swap_amount_fixed).toBeNull();
+    expect(json.data?.label).toContain("Stop-loss");
+
+    if (json.data?.id) {
+      await request.delete(`${BASE_URL}/api/price-alerts/${json.data.id}`, {
+        data: { walletPubkey: TEST_WALLET },
+      });
+    }
+  });
+
+  test("creates a swap-type (dip-buy) alert with fixed USD amount", async ({ request }) => {
+    const create = await request.post(`${BASE_URL}/api/price-alerts`, {
+      data: {
+        walletPubkey: TEST_WALLET,
+        intent: {
+          action: "price_alert",
+          token: "BONK",
+          targetPrice: 0.00002,
+          direction: "below",
+          action_type: "swap",
+          swap_from_token: "USDC",
+          swap_to_token: "BONK",
+          swap_amount_fixed: 50,
+          label: "Dip buy: $50 BONK below 0.00002",
+        },
+      },
+    });
+    const json = (await create.json()) as {
+      success: boolean;
+      data?: { id: string; swap_amount_pct: number | null; swap_amount_fixed: number };
+    };
+    expect(json.success).toBe(true);
+    expect(json.data?.swap_amount_pct).toBeNull();
+    expect(json.data?.swap_amount_fixed).toBe(50);
+
+    if (json.data?.id) {
+      await request.delete(`${BASE_URL}/api/price-alerts/${json.data.id}`, {
+        data: { walletPubkey: TEST_WALLET },
+      });
+    }
+  });
+
+  test("rejects swap alert with missing swap tokens", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/price-alerts`, {
+      data: {
+        walletPubkey: TEST_WALLET,
+        intent: {
+          action: "price_alert",
+          token: "SOL",
+          targetPrice: 100,
+          direction: "below",
+          action_type: "swap",
+          swap_amount_pct: 50,
+          // swap_from_token and swap_to_token intentionally omitted
+        },
+      },
+    });
+    const json = (await res.json()) as { success: boolean };
+    expect(json.success).toBe(false);
+  });
+
+  test("rejects swap alert with swap_amount_pct out of range", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/price-alerts`, {
+      data: {
+        walletPubkey: TEST_WALLET,
+        intent: {
+          action: "price_alert",
+          token: "SOL",
+          targetPrice: 100,
+          direction: "below",
+          action_type: "swap",
+          swap_from_token: "SOL",
+          swap_to_token: "USDC",
+          swap_amount_pct: 150,
+        },
+      },
+    });
+    const json = (await res.json()) as { success: boolean };
+    expect(json.success).toBe(false);
+  });
+
+  test("rejects swap alert when both pct and fixed amounts are set", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/price-alerts`, {
+      data: {
+        walletPubkey: TEST_WALLET,
+        intent: {
+          action: "price_alert",
+          token: "SOL",
+          targetPrice: 100,
+          direction: "below",
+          action_type: "swap",
+          swap_from_token: "SOL",
+          swap_to_token: "USDC",
+          swap_amount_pct: 50,
+          swap_amount_fixed: 100,
+        },
+      },
+    });
+    const json = (await res.json()) as { success: boolean };
+    expect(json.success).toBe(false);
+  });
+
+  test("rejects swap alert with unsupported swap token", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/price-alerts`, {
+      data: {
+        walletPubkey: TEST_WALLET,
+        intent: {
+          action: "price_alert",
+          token: "SOL",
+          targetPrice: 100,
+          direction: "below",
+          action_type: "swap",
+          swap_from_token: "FAKE",
+          swap_to_token: "USDC",
+          swap_amount_pct: 50,
+        },
+      },
+    });
+    const json = (await res.json()) as { success: boolean };
+    expect(json.success).toBe(false);
+  });
+
+  test("rejects swap alert when from and to tokens are identical", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/price-alerts`, {
+      data: {
+        walletPubkey: TEST_WALLET,
+        intent: {
+          action: "price_alert",
+          token: "SOL",
+          targetPrice: 100,
+          direction: "below",
+          action_type: "swap",
+          swap_from_token: "SOL",
+          swap_to_token: "SOL",
+          swap_amount_pct: 50,
+        },
+      },
+    });
+    const json = (await res.json()) as { success: boolean };
+    expect(json.success).toBe(false);
+  });
 });

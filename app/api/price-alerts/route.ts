@@ -80,6 +80,63 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const actionType = alert.action_type ?? "notify";
+  const swapFromToken = alert.swap_from_token?.toUpperCase() ?? null;
+  const swapToToken = alert.swap_to_token?.toUpperCase() ?? null;
+
+  if (actionType === "swap") {
+    if (!swapFromToken || !swapToToken) {
+      return NextResponse.json(
+        { success: false, error: "swap_from_token and swap_to_token required for swap-type alerts" },
+        { status: 400 }
+      );
+    }
+    if (!getToken(swapFromToken)) {
+      return NextResponse.json(
+        { success: false, error: `Unsupported swap_from_token: ${swapFromToken}` },
+        { status: 400 }
+      );
+    }
+    if (!getToken(swapToToken)) {
+      return NextResponse.json(
+        { success: false, error: `Unsupported swap_to_token: ${swapToToken}` },
+        { status: 400 }
+      );
+    }
+    if (swapFromToken === swapToToken) {
+      return NextResponse.json(
+        { success: false, error: "swap_from_token and swap_to_token must be different" },
+        { status: 400 }
+      );
+    }
+    const hasPct = alert.swap_amount_pct != null;
+    const hasFixed = alert.swap_amount_fixed != null;
+    if (hasPct && hasFixed) {
+      return NextResponse.json(
+        { success: false, error: "Specify swap_amount_pct or swap_amount_fixed, not both" },
+        { status: 400 }
+      );
+    }
+    if (!hasPct && !hasFixed) {
+      return NextResponse.json(
+        { success: false, error: "swap_amount_pct or swap_amount_fixed required for swap-type alerts" },
+        { status: 400 }
+      );
+    }
+    if (hasPct && (alert.swap_amount_pct! <= 0 || alert.swap_amount_pct! > 100)) {
+      return NextResponse.json(
+        { success: false, error: "swap_amount_pct must be in (0, 100]" },
+        { status: 400 }
+      );
+    }
+    if (hasFixed && alert.swap_amount_fixed! <= 0) {
+      return NextResponse.json(
+        { success: false, error: "swap_amount_fixed must be > 0" },
+        { status: 400 }
+      );
+    }
+  }
+
   const row: PriceAlert = {
     id: crypto.randomUUID(),
     wallet_pubkey: walletPubkey,
@@ -89,14 +146,22 @@ export async function POST(req: NextRequest) {
     is_triggered: 0,
     created_at: Date.now(),
     triggered_at: null,
+    action_type: actionType,
+    swap_from_token: swapFromToken,
+    swap_to_token: swapToToken,
+    swap_amount_pct: alert.swap_amount_pct ?? null,
+    swap_amount_fixed: alert.swap_amount_fixed ?? null,
+    label: alert.label ?? null,
   };
 
   getDb()
     .prepare(
       `INSERT INTO price_alerts
-       (id, wallet_pubkey, token, target_price, direction, is_triggered, created_at, triggered_at)
+       (id, wallet_pubkey, token, target_price, direction, is_triggered, created_at, triggered_at,
+        action_type, swap_from_token, swap_to_token, swap_amount_pct, swap_amount_fixed, label)
        VALUES
-       (@id, @wallet_pubkey, @token, @target_price, @direction, @is_triggered, @created_at, @triggered_at)`
+       (@id, @wallet_pubkey, @token, @target_price, @direction, @is_triggered, @created_at, @triggered_at,
+        @action_type, @swap_from_token, @swap_to_token, @swap_amount_pct, @swap_amount_fixed, @label)`
     )
     .run(row);
 
