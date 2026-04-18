@@ -15,7 +15,9 @@ export type IntentAction =
   | "view_portfolio"
   | "pause_portfolio"
   | "resume_portfolio"
-  | "set_drift_threshold";
+  | "set_drift_threshold"
+  | "explain_tx"
+  | "spending_insights";
 
 export interface PortfolioTarget {
   token: string;
@@ -82,6 +84,15 @@ export interface ResumePortfolioIntent {
 export interface SetDriftThresholdIntent {
   action: "set_drift_threshold";
   threshold: number;
+}
+
+export interface ExplainTxIntent {
+  action: "explain_tx";
+  signature: string;
+}
+
+export interface SpendingInsightsIntent {
+  action: "spending_insights";
 }
 
 export interface SendIntent {
@@ -201,7 +212,9 @@ export type Intent =
   | ViewPortfolioIntent
   | PausePortfolioIntent
   | ResumePortfolioIntent
-  | SetDriftThresholdIntent;
+  | SetDriftThresholdIntent
+  | ExplainTxIntent
+  | SpendingInsightsIntent;
 
 export interface WalletContext {
   publicKey?: string;
@@ -285,6 +298,10 @@ export function isIntent(value: unknown): value is Intent {
       return true;
     case "set_drift_threshold":
       return typeof value.threshold === "number" && value.threshold > 0;
+    case "explain_tx":
+      return typeof value.signature === "string" && value.signature.length > 0;
+    case "spending_insights":
+      return true;
     default:
       return false;
   }
