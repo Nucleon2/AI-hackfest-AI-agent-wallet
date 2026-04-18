@@ -2,6 +2,7 @@
 
 import { solscanUrl, type SolanaNetwork } from "@/lib/solanaClient";
 import { shortAddress } from "@/lib/transactionBuilder";
+import type { StakingProvider } from "@/types/intent";
 
 interface BaseReceiptProps {
   signature: string;
@@ -23,7 +24,17 @@ export interface SwapReceiptProps extends BaseReceiptProps {
   toToken: string;
 }
 
-export type ReceiptCardProps = SendReceiptProps | SwapReceiptProps;
+export interface StakeReceiptProps extends BaseReceiptProps {
+  kind: "stake" | "unstake";
+  provider: StakingProvider;
+  inputAmount: number;
+  outputAmount: number;
+}
+
+export type ReceiptCardProps =
+  | SendReceiptProps
+  | SwapReceiptProps
+  | StakeReceiptProps;
 
 function formatNumber(n: number): string {
   if (!Number.isFinite(n)) return "—";
@@ -32,15 +43,49 @@ function formatNumber(n: number): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
 }
 
+function providerName(p: StakingProvider): string {
+  return p === "jito" ? "Jito" : "Marinade";
+}
+
+function describeReceiptLabel(props: ReceiptCardProps): string {
+  if (props.kind === "swap") return "Swap executed";
+  if (props.kind === "stake") return `Staked with ${providerName(props.provider)}`;
+  if (props.kind === "unstake")
+    return `Unstaked from ${providerName(props.provider)}`;
+  return "Transaction sent";
+}
+
+function describeReceiptSummary(props: ReceiptCardProps): string {
+  switch (props.kind) {
+    case "swap":
+      return `${formatNumber(props.fromAmount)} ${props.fromToken} → ${formatNumber(
+        props.toAmount
+      )} ${props.toToken}`;
+    case "stake": {
+      const liquidToken = props.provider === "jito" ? "JitoSOL" : "mSOL";
+      return `${formatNumber(props.inputAmount)} SOL → ${formatNumber(
+        props.outputAmount
+      )} ${liquidToken}`;
+    }
+    case "unstake": {
+      const liquidToken = props.provider === "jito" ? "JitoSOL" : "mSOL";
+      return `${formatNumber(props.inputAmount)} ${liquidToken} → ${formatNumber(
+        props.outputAmount
+      )} SOL`;
+    }
+    case "send":
+      return `${props.amount} ${props.token} → ${shortAddress(
+        props.recipient,
+        4,
+        4
+      )}`;
+  }
+}
+
 export function ReceiptCard(props: ReceiptCardProps) {
   const url = solscanUrl(props.signature);
-  const label = props.kind === "swap" ? "Swap executed" : "Transaction sent";
-  const summary =
-    props.kind === "swap"
-      ? `${formatNumber(props.fromAmount)} ${props.fromToken} → ${formatNumber(
-          props.toAmount
-        )} ${props.toToken}`
-      : `${props.amount} ${props.token} → ${shortAddress(props.recipient, 4, 4)}`;
+  const label = describeReceiptLabel(props);
+  const summary = describeReceiptSummary(props);
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-emerald-400/25 bg-emerald-500/5 p-4 backdrop-blur-sm">
