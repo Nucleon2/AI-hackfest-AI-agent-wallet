@@ -4,7 +4,7 @@
 
 **Name:** AI Agent Wallet (working title — rename as desired)
 **Type:** Hackathon project — MLH AI Hackfest, Solana track
-**Goal:** A natural language-powered Solana wallet. Users type plain English commands ("Send 2 SOL to Ahmad.sol", "Swap 50 USDC for SOL", "Keep my portfolio 60% SOL 40% USDC") and the AI parses intent, builds the transaction, previews it, and executes on confirmation. Includes an autonomous portfolio manager that monitors drift and rebalances via Jupiter swaps without user intervention.
+**Goal:** A natural language-powered Solana wallet. Users type plain English commands ("Send 2 SOL to Ahmad.sol", "Swap 50 USDC for SOL", "Keep my portfolio 60% SOL 40% USDC") and the AI parses intent, builds the transaction, previews it, and executes on confirmation. Includes an autonomous portfolio manager that monitors drift and rebalances via Jupiter swaps without user intervention. Every transaction is scanned by an AI security guard before signing.
 **Target:** Win the Solana track by combining AI decision-making with Solana's speed and near-zero fees.
 
 ---
@@ -16,16 +16,16 @@
 | Framework | Next.js 14 (App Router) |
 | Language | TypeScript (strict mode) |
 | Styling | Tailwind CSS |
-| Animations (UI) | GSAP + Framer Motion |
-| 3D / WebGL | React Three Fiber + Drei |
+| Animations (UI) | Framer Motion (`motion/react` v12) |
+| 3D / WebGL | React Three Fiber + Drei (components exist, not mounted in page) |
 | Wallet adapter | `@solana/wallet-adapter-react` |
 | Solana SDK | `@solana/web3.js` |
 | Token swaps | Jupiter Aggregator API v6 |
-| AI layer | Anthropic Claude API (`claude-sonnet-4-20250514`) |
+| AI layer | Anthropic Claude API (`claude-haiku-4-5-20251001`) |
 | Deployment | Vercel |
 | Network (dev) | Solana devnet |
 | Network (prod) | Solana mainnet-beta |
-| components | shadcn and magic ui |
+| Components | shadcn and magic ui |
 
 ---
 
@@ -43,6 +43,8 @@
 │       │   └── route.ts         # Jupiter API — fetch swap quote for preview
 │       ├── swap-build/
 │       │   └── route.ts         # Jupiter API — build swap transaction
+│       ├── analyze-transaction/
+│       │   └── route.ts         # Claude API — security scan before signing (AI Wallet Guard)
 │       ├── schedules/           # Scheduled payments CRUD + due/execute
 │       ├── contacts/            # Contact address book CRUD + resolve
 │       ├── chat-sessions/       # Chat session + message persistence
@@ -55,7 +57,8 @@
 │               └── route.ts     # POST: Claude decides swap instructions
 ├── components/
 │   ├── ChatInterface.tsx         # Main chat window — messages, input bar, all intent handlers
-│   ├── TransactionPreview.tsx    # Confirmation modal before signing
+│   ├── TransactionPreview.tsx    # Confirmation modal before signing (includes risk analysis section)
+│   ├── SecurityScanOverlay.tsx   # Fullscreen scan overlay shown during AI security analysis
 │   ├── PortfolioCard.tsx         # SOL balance summary card
 │   ├── PortfolioManagerCard.tsx  # AI portfolio manager — allocation bars, rebalance UI
 │   ├── ReceiptCard.tsx           # Post-transaction receipt with Solscan link
@@ -65,7 +68,8 @@
 │   ├── MultiStepPreview.tsx      # Multi-step transaction progress UI
 │   ├── Sidebar.tsx               # Balance panel, quick actions, chat sessions, portfolio status
 │   └── three/
-│       └── WalletOrb.tsx         # React Three Fiber 3D centerpiece orb
+│       ├── Scene.tsx             # React Three Fiber canvas wrapper (exists, not mounted in page)
+│       └── WalletOrb.tsx         # 3D orb with idle/processing/confirmed/error/scanning states
 ├── hooks/
 │   ├── useWalletBalance.ts       # Fetches SOL balance, subscribes to account changes
 │   ├── useTransactionHistory.ts  # Fetches recent txs from Solana RPC
@@ -110,7 +114,9 @@ User types message
   → Claude returns structured JSON intent
   → Frontend validates intent type
   → transactionBuilder.ts builds the raw Solana transaction
-  → TransactionPreview modal shown to user
+  → POST /api/analyze-transaction (Claude security scan runs in parallel)
+  → SecurityScanOverlay shown during scan, risk result embedded in modal
+  → TransactionPreview modal shown to user (with risk badge)
   → User confirms → wallet signs → broadcast to Solana
   → AI generates receipt message
 ```
@@ -192,27 +198,74 @@ Resolve `.sol` names using the `@bonfida/spl-name-service` package before buildi
 
 ---
 
-## 3D Orb (WalletOrb.tsx)
+## AI Wallet Guard (Security Scan)
 
-The centerpiece visual. A floating orb that reacts to wallet state.
+Every send, swap, and stake transaction is analyzed by Claude before the user signs. The scan runs after preflight builds the transaction and before the confirmation modal appears.
 
-**States:**
-- `idle` — slow rotation, gentle distortion
-- `processing` — faster rotation, particles accelerate, color shifts to amber
-- `confirmed` — burst particle explosion outward, then resets to idle
-- `error` — red pulse, shakes slightly
+### Flow
 
-**Implementation approach:**
-- Use `MeshDistortMaterial` from `@react-three/drei` for the base orb
-- Use `Points` with a custom shader for the particle cloud surrounding it
-- Animate state transitions with `useSpring` from `@react-spring/three`
-- Orb sits in a fixed canvas in the background, chat UI overlays it
-- Keep canvas `style={{ position: "fixed", inset: 0, zIndex: 0 }}` — chat is `zIndex: 10`
+```
+Preflight complete (previewStatus = "ready")
+  → POST /api/analyze-transaction { txContext, walletPubkey, solBalance }
+  → SecurityScanOverlay renders (cyan animated scan line + HUD panel)
+  → Claude Haiku analyzes the transaction context
+  → Returns TxAnalysis { riskLevel, riskScore, action, programName, warnings, summary }
+  → Overlay fades out, result embedded in TransactionPreview modal
+  → If riskLevel is "caution" or "danger": logged to threat_log SQLite table
+```
 
-**Performance:**
-- Cap particle count at 2000 for safe mobile performance
-- Use `dpr={[1, 1.5]}` on the Canvas component
-- Suspend the Canvas with a fallback div so it doesn't block the chat from loading
+### Risk Levels
+
+| Level | Color | Criteria |
+|---|---|---|
+| `safe` | Emerald | Known programs, small amounts, no red flags |
+| `caution` | Amber | Amount 10–50 SOL, priceImpact 0.5–2%, unknown route |
+| `danger` | Red | Amount >50 SOL, priceImpact >2%, unknown program ID |
+
+### TxAnalysis shape (exported from `/api/analyze-transaction/route.ts`)
+
+```typescript
+export interface TxAnalysis {
+  riskLevel: "safe" | "caution" | "danger";
+  riskScore: number;    // 0–100
+  action: string;       // "SOL Transfer", "Token Swap", etc.
+  programName: string;  // "System Program", "Jupiter Aggregator", etc.
+  warnings: string[];   // specific concerns, empty if safe
+  summary: string;      // ≤80 chars plain English
+}
+```
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `app/api/analyze-transaction/route.ts` | Claude Haiku security analysis endpoint |
+| `components/SecurityScanOverlay.tsx` | Animated scan UI (AnimatePresence, cyan sweep line, HUD) |
+| `components/TransactionPreview.tsx` | Renders `RiskAnalysisSection` when `analysis` prop is set |
+| `components/ChatInterface.tsx` | `runSecurityScan()` callback, scan trigger useEffects, overlay render |
+
+### Database Schema (threat_log table)
+
+```sql
+CREATE TABLE threat_log (
+  id            TEXT PRIMARY KEY,
+  wallet_pubkey TEXT NOT NULL,
+  tx_context    TEXT NOT NULL,   -- JSON of what was being signed
+  risk_level    TEXT NOT NULL,   -- "caution" or "danger" only
+  analysis_json TEXT NOT NULL,   -- full TxAnalysis JSON
+  created_at    INTEGER NOT NULL
+);
+```
+
+### Constraints
+
+- Scan failure never blocks signing — if Claude is unavailable, `analyzed: false` baseline is returned
+- Auto-approve waits for the scan to complete (`!isScanning` guard on auto-approve effects)
+- Manual confirm is also blocked while scanning — button shows "Scanning…" and is disabled
+- If no API key, the endpoint returns the baseline immediately; the scan overlay appears briefly then dismisses
+- `analyzed: false` on the result means "not scanned" — UI shows "AI Guard unavailable" instead of "Verified"
+- Stale scan responses are ignored via `AbortController` — cancelling a preview aborts the in-flight fetch
+- Scheduled payment executions are not scanned (non-intrusive background flow)
 
 ---
 
@@ -226,7 +279,7 @@ NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
 NEXT_PUBLIC_SOLANA_NETWORK=devnet
 ```
 
-Never expose `ANTHROPIC_API_KEY` to the client. All Claude calls go through `/api/parse-intent` (server-side route).
+Never expose `ANTHROPIC_API_KEY` to the client. All Claude calls go through server-side routes.
 
 ---
 
@@ -239,7 +292,7 @@ Never expose `ANTHROPIC_API_KEY` to the client. All Claude calls go through `/ap
 - [x] Natural language swap via Jupiter (quote → preview → execute)
 - [x] AI-generated receipt after every transaction (links to Solscan)
 - [x] Unknown intent handling (Claude asks for clarification)
-- [ ] 3D orb reacts to transaction states
+- [x] AI Wallet Guard — security scan before every transaction
 - [ ] Devnet working end-to-end with real transactions
 
 ---
@@ -254,6 +307,7 @@ Never expose `ANTHROPIC_API_KEY` to the client. All Claude calls go through `/ap
 6. **Auto-approve mode** — toggle to execute transactions without manual confirmation
 7. **AI Portfolio Manager** — autonomous rebalancing (see below)
 8. **Voice input** — click the mic next to the send button, speak a command, transcript auto-submits through the normal intent pipeline (Web Speech API; Chromium-based browsers)
+9. **AI Wallet Guard** — every send/swap/stake is scanned by Claude before signing; risk badge (safe/caution/danger) shown in confirmation modal; threats logged to SQLite
 
 ---
 
@@ -330,13 +384,12 @@ CREATE TABLE portfolio_configs (
 
 1. Open the app, connect Phantom wallet (devnet)
 2. Type: `"What's in my wallet?"` — shows balance card
-3. Type: `"Swap 10 USDC for SOL"` — shows swap quote preview, confirm, show receipt
-4. Type: `"Send 0.1 SOL to <address>"` — preview, confirm, receipt with Solscan link
+3. Type: `"Send 0.1 SOL to <address>"` — watch the cyan scan overlay flash, then green "Safe" badge in the modal — confirm, receipt with Solscan link
+4. Type: `"Swap 10 USDC for SOL"` — shows swap quote preview with security scan result, confirm, show receipt
 5. Type: `"keep my portfolio 60% SOL, 30% USDC, 10% BONK"` — shows portfolio manager card with allocation bars
 6. Type: `"show my portfolio"` — shows live prices, current vs target drift indicators
 7. Click "Rebalance Now" — Claude analyzes drift and recommends exact swap amounts
-8. Show the orb reacting during the transaction processing state
-9. One-liner pitch: "Most wallets make you learn crypto. This one already speaks human — and manages itself."
+8. One-liner pitch: "Most wallets make you learn crypto. This one already speaks human, manages itself, and won't let you sign anything suspicious."
 
 ---
 
@@ -346,8 +399,8 @@ CREATE TABLE portfolio_configs (
 - Co-locate types with the file that owns them unless shared across 3+ files
 - API routes return `{ success: true, data: ... }` or `{ success: false, error: string }`
 - Never `any` — use `unknown` and narrow properly
-- Tailwind only for styling — no inline style objects except for dynamic Three.js canvas props
-- GSAP animations go in `useEffect` with proper cleanup (`ctx.revert()`)
+- Tailwind only for styling — inline style objects are allowed only when the value is dynamic or Tailwind cannot express it (e.g. CSS gradients with runtime color stops, `box-shadow` glow values)
+- Animation library is `motion/react` (Framer Motion v12) — not GSAP
 - All Solana amounts stored and computed in lamports internally, only converted to SOL/UI units for display
 
 ---
@@ -359,6 +412,4 @@ CREATE TABLE portfolio_configs (
 - Wallet adapter: https://github.com/anza-xyz/wallet-adapter
 - Solscan (devnet): https://solscan.io/?cluster=devnet
 - Anthropic API: https://docs.anthropic.com
-- React Three Fiber: https://docs.pmnd.rs/react-three-fiber
-- Drei helpers: https://github.com/pmndrs/drei
 - Bonfida name service: https://github.com/Bonfida/bonfida-utils

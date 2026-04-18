@@ -14,6 +14,7 @@ import { ShimmerButton } from "@/components/ui/shimmer-button";
 import { shortAddress } from "@/lib/transactionBuilder";
 import { cn } from "@/lib/utils";
 import type { SwapQuoteDisplay } from "@/app/api/swap-quote/route";
+import type { TxAnalysis } from "@/app/api/analyze-transaction/route";
 
 export type { SwapQuoteDisplay };
 
@@ -30,6 +31,8 @@ interface CommonFields {
   errorMessage?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
+  analysis?: TxAnalysis | null;
+  isScanning?: boolean;
 }
 
 interface SendFields extends CommonFields {
@@ -85,7 +88,7 @@ function stakeHeaderLabel(intent: StakeIntent | UnstakeIntent): string {
 }
 
 export function TransactionPreview(props: TransactionPreviewProps) {
-  const { status, errorMessage, onCancel, onConfirm } = props;
+  const { status, errorMessage, onCancel, onConfirm, isScanning } = props;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -100,7 +103,7 @@ export function TransactionPreview(props: TransactionPreviewProps) {
   const hasError = Boolean(errorMessage);
   const isBusy =
     status === "signing" || status === "sending" || status === "confirming";
-  const canConfirm = status === "ready" && !hasError;
+  const canConfirm = status === "ready" && !hasError && !isScanning;
   const isSwap = isSwapProps(props);
   const isStake = isStakeProps(props);
   const headerLabel = isStake
@@ -151,6 +154,8 @@ export function TransactionPreview(props: TransactionPreviewProps) {
           </span>
         </div>
 
+        {props.analysis && <RiskAnalysisSection analysis={props.analysis} />}
+
         <div className="space-y-3">
           {isStakeProps(props) ? (
             <StakePreviewBody intent={props.intent} quote={props.quote ?? null} />
@@ -188,10 +193,60 @@ export function TransactionPreview(props: TransactionPreviewProps) {
             borderRadius="12px"
             className="flex-1 border-indigo-500/30 disabled:opacity-40"
           >
-            <span className="text-sm text-white">{STATUS_LABEL[status]}</span>
+            <span className="text-sm text-white">
+              {isScanning ? "Scanning…" : STATUS_LABEL[status]}
+            </span>
           </ShimmerButton>
         </div>
       </div>
+    </div>
+  );
+}
+
+const RISK_CONFIG = {
+  safe:    { bgClass: "bg-emerald-500/10 border-emerald-500/20", textClass: "text-emerald-300", label: "Safe" },
+  caution: { bgClass: "bg-amber-500/10 border-amber-500/20",    textClass: "text-amber-300",   label: "Caution" },
+  danger:  { bgClass: "bg-red-500/10 border-red-500/20",        textClass: "text-red-300",     label: "Danger" },
+};
+
+function RiskAnalysisSection({ analysis }: { analysis: TxAnalysis }) {
+  const cfg = RISK_CONFIG[analysis.riskLevel];
+  return (
+    <div className={`mb-4 rounded-xl border p-3 space-y-2 ${cfg.bgClass}`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] font-bold uppercase tracking-wider ${cfg.textClass}`}>
+            {cfg.label}
+          </span>
+          <span className="text-[10px] text-white/30">
+            {analysis.action} · {analysis.programName}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-white/30">Risk</span>
+          <span className={`font-mono text-[10px] font-bold ${cfg.textClass}`}>{analysis.riskScore}</span>
+        </div>
+      </div>
+      <p className="text-[11px] leading-relaxed text-white/60">{analysis.summary}</p>
+      {analysis.warnings.length > 0 && (
+        <ul className="space-y-1">
+          {analysis.warnings.map((w, i) => (
+            <li key={i} className={`flex items-start gap-1.5 text-[11px] ${cfg.textClass}`}>
+              <span className="mt-px shrink-0">⚠</span>
+              <span>{w}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {analysis.riskLevel === "safe" && analysis.analyzed && (
+        <div className="flex items-center gap-1.5 text-[10px] text-emerald-400/70">
+          <span>✓</span>
+          <span>Verified by AI Guard</span>
+        </div>
+      )}
+      {!analysis.analyzed && (
+        <div className="text-[10px] text-white/25">AI Guard unavailable</div>
+      )}
     </div>
   );
 }

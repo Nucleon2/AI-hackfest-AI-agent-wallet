@@ -127,6 +127,17 @@ export function getDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_price_alerts_wallet
       ON price_alerts (wallet_pubkey, is_triggered);
+
+    CREATE TABLE IF NOT EXISTS threat_log (
+      id            TEXT PRIMARY KEY,
+      wallet_pubkey TEXT NOT NULL,
+      tx_context    TEXT NOT NULL,
+      risk_level    TEXT NOT NULL,
+      analysis_json TEXT NOT NULL,
+      created_at    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_threat_log_wallet
+      ON threat_log (wallet_pubkey, created_at DESC);
   `);
   return _db;
 }
