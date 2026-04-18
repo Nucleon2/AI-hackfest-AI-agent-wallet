@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { connection, SOLANA_NETWORK } from "@/lib/solanaClient";
 import { MSOL_MINT, JITOSOL_MINT } from "@/lib/tokenRegistry";
 import { fetchMarinadeApy, fetchMsolPrice } from "@/lib/marinadeClient";
@@ -12,10 +11,11 @@ function fail(status: number, error: string) {
 }
 
 async function sumTokenBalance(owner: PublicKey, mint: string): Promise<number> {
-  const mintKey = new PublicKey(mint);
+  // TokenAccountsFilter is a discriminated union of `{ mint }` or
+  // `{ programId }` — specifying mint alone already scopes to that
+  // mint's SPL token program.
   const res = await connection.getParsedTokenAccountsByOwner(owner, {
-    programId: TOKEN_PROGRAM_ID,
-    mint: mintKey,
+    mint: new PublicKey(mint),
   });
   return res.value.reduce((acc, { account }) => {
     const amt = account.data.parsed?.info?.tokenAmount?.uiAmount;
