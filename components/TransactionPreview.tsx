@@ -32,6 +32,7 @@ interface CommonFields {
   onConfirm: () => void;
   onCancel: () => void;
   analysis?: TxAnalysis | null;
+  isScanning?: boolean;
 }
 
 interface SendFields extends CommonFields {
@@ -87,7 +88,7 @@ function stakeHeaderLabel(intent: StakeIntent | UnstakeIntent): string {
 }
 
 export function TransactionPreview(props: TransactionPreviewProps) {
-  const { status, errorMessage, onCancel, onConfirm } = props;
+  const { status, errorMessage, onCancel, onConfirm, isScanning } = props;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -102,7 +103,7 @@ export function TransactionPreview(props: TransactionPreviewProps) {
   const hasError = Boolean(errorMessage);
   const isBusy =
     status === "signing" || status === "sending" || status === "confirming";
-  const canConfirm = status === "ready" && !hasError;
+  const canConfirm = status === "ready" && !hasError && !isScanning;
   const isSwap = isSwapProps(props);
   const isStake = isStakeProps(props);
   const headerLabel = isStake
@@ -192,7 +193,9 @@ export function TransactionPreview(props: TransactionPreviewProps) {
             borderRadius="12px"
             className="flex-1 border-indigo-500/30 disabled:opacity-40"
           >
-            <span className="text-sm text-white">{STATUS_LABEL[status]}</span>
+            <span className="text-sm text-white">
+              {isScanning ? "Scanning…" : STATUS_LABEL[status]}
+            </span>
           </ShimmerButton>
         </div>
       </div>
@@ -235,11 +238,14 @@ function RiskAnalysisSection({ analysis }: { analysis: TxAnalysis }) {
           ))}
         </ul>
       )}
-      {analysis.riskLevel === "safe" && (
+      {analysis.riskLevel === "safe" && analysis.analyzed && (
         <div className="flex items-center gap-1.5 text-[10px] text-emerald-400/70">
           <span>✓</span>
           <span>Verified by AI Guard</span>
         </div>
+      )}
+      {!analysis.analyzed && (
+        <div className="text-[10px] text-white/25">AI Guard unavailable</div>
       )}
     </div>
   );

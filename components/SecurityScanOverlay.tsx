@@ -156,11 +156,14 @@ export function SecurityScanOverlay({ visible, analysis }: SecurityScanOverlayPr
                 )}
 
                 {/* Safe verification */}
-                {analysis.riskLevel === "safe" && (
+                {analysis.riskLevel === "safe" && analysis.analyzed && (
                   <div className="flex items-center gap-1.5 text-[10px] text-emerald-400/70">
                     <span>✓</span>
                     <span>Verified by AI Guard</span>
                   </div>
+                )}
+                {!analysis.analyzed && (
+                  <div className="text-[10px] text-white/25">AI Guard unavailable</div>
                 )}
               </motion.div>
             )}

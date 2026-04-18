@@ -36,6 +36,7 @@ export interface TxAnalysis {
   programName: string;
   warnings: string[];
   summary: string;
+  analyzed: boolean; // false when Claude was unavailable — UI should not show "Verified"
 }
 
 type TxContext =
@@ -55,23 +56,37 @@ const SAFE_BASELINE: TxAnalysis = {
   action: "Transaction",
   programName: "Unknown",
   warnings: [],
-  summary: "Analysis unavailable — proceeding with caution.",
+  summary: "Analysis unavailable.",
+  analyzed: false,
 };
 
 function safeParse(text: string): TxAnalysis {
   try {
     const cleaned = text.replace(/```json\n?|\n?```/g, "").trim();
     const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+    const score = parsed.riskScore;
     if (
       typeof parsed.riskLevel === "string" &&
       ["safe", "caution", "danger"].includes(parsed.riskLevel) &&
-      typeof parsed.riskScore === "number" &&
+      typeof score === "number" &&
+      Number.isFinite(score) &&
+      score >= 0 &&
+      score <= 100 &&
       typeof parsed.action === "string" &&
       typeof parsed.programName === "string" &&
       Array.isArray(parsed.warnings) &&
+      (parsed.warnings as unknown[]).every((w) => typeof w === "string") &&
       typeof parsed.summary === "string"
     ) {
-      return parsed as unknown as TxAnalysis;
+      return {
+        riskLevel: parsed.riskLevel as TxAnalysis["riskLevel"],
+        riskScore: Math.round(score),
+        action: parsed.action,
+        programName: parsed.programName,
+        warnings: parsed.warnings as string[],
+        summary: parsed.summary,
+        analyzed: true,
+      };
     }
   } catch {
     // fall through
