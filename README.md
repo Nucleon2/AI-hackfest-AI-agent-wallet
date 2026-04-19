@@ -20,7 +20,7 @@ Built for the **Solana track** of **MLH AI Hackfest**.
 
 <br />
 
-**[Demo](#-see-it-in-60-seconds)** · **[Features](#-features)** · **[Architecture](#-architecture)** · **[Getting Started](#-getting-started)** · **[Why Solana](#-why-this-only-works-on-solana)** · **[For the Judges](#-for-the-judges)**
+**[Demo](#-see-it-in-60-seconds)** · **[Features](#-features)** · **[Architecture](#-architecture)** · **[Getting Started](#-getting-started)** · **[Why Solana](#-why-this-only-works-on-solana)** · **[Under the Hood](#-under-the-hood)**
 
 <!-- Drop a hero screenshot or GIF at docs/hero.png and uncomment the line below -->
 <!-- ![Solace hero](docs/hero.png) -->
@@ -46,16 +46,16 @@ Built for the **Solana track** of **MLH AI Hackfest**.
 | 🗣️ **Natural-Language Intent Parsing** — 15+ intent types (send, swap, schedule, contacts, portfolio, multi-step, …) parsed by Claude into structured JSON. | 🛡️ **AI Wallet Guard** — every send/swap/stake is analyzed by Claude before signing. Risk badge (safe / caution / danger) + animated scan overlay. Threats are persisted to SQLite. |
 | 🤖 **Autonomous Portfolio Manager** — set `60% SOL / 40% USDC` once; a 30-second polling loop monitors drift and rebalances via Jupiter without you. | 🔗 **Multi-Step Command Chaining** — *"swap 50 USDC for SOL then send it to alice.sol"* runs as one supervised pipeline with output chaining. |
 | 📅 **Scheduled & Recurring Payments** — *"send 10 USDC to Bob every Friday"* persisted in SQLite, polled every 30 s. | 📇 **Address Book + `.sol` Domains** — save contacts by name; resolve Bonfida `.sol` names before any transfer. |
-| 🎙️ **Voice Input** — press the mic, speak the command, the transcript runs through the same intent pipeline. | 💬 **Chat Session Persistence** — conversations saved per wallet; switch sessions from the sidebar. |
-| ⚙️ **Auto-Approve Mode** — opt in to skip the confirmation modal after the AI guard has cleared the transaction. | 🔮 **3D Wallet Orb** — React Three Fiber orb with idle / processing / confirmed / error / scanning states for immediate visual feedback. |
+| 🎙️ **Voice Input** — press the mic, speak the command, the transcript runs through the same intent pipeline. | ⚙️ **Auto-Approve Mode** — opt in to skip the confirmation modal after the AI guard has cleared the transaction. |
+| 💬 **Chat Session Persistence** — conversations saved per wallet; switch sessions from the sidebar. | |
 
 ---
 
 ## 🎬 See it in 60 seconds
 
-A walkthrough of the demo we'll run for the judges:
+A walkthrough of what Solace actually does end-to-end:
 
-1. **Connect** Phantom (devnet) — the orb glows idle.
+1. **Connect** Phantom (devnet).
 2. Type **"What's in my wallet?"** — Solace replies with a live balance card.
 3. Type **"Send 0.1 SOL to <address>"** — the cyan AI Wallet Guard scan sweeps the modal, lands on a green ✅ *Safe* badge, you confirm, and a Solscan-linked receipt appears in chat.
 4. Type **"Swap 10 USDC for SOL"** — Solace pulls a Jupiter v6 quote, shows rate + price impact + fees, you confirm, swap executes.
@@ -111,7 +111,6 @@ flowchart LR
 | Language | [TypeScript](https://www.typescriptlang.org) (strict mode) |
 | Styling | [Tailwind CSS](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com) + [Magic UI](https://magicui.design) |
 | Animation | [`motion/react`](https://motion.dev) (Framer Motion v12) |
-| 3D / WebGL | [React Three Fiber](https://docs.pmnd.rs/react-three-fiber) + [Drei](https://github.com/pmndrs/drei) |
 | Wallet adapter | [`@solana/wallet-adapter-react`](https://github.com/anza-xyz/wallet-adapter) (Phantom, Backpack) |
 | Solana SDK | [`@solana/web3.js`](https://solana-labs.github.io/solana-web3.js/) + [`@solana/spl-token`](https://github.com/solana-labs/solana-program-library) |
 | SOL domains | [`@bonfida/spl-name-service`](https://github.com/Bonfida/bonfida-utils) |
@@ -242,8 +241,7 @@ End-to-end tests live in `tests/` (`portfolio-manager.spec.ts`, `staking.spec.ts
 │   ├── PortfolioManagerCard.tsx   # Allocation bars, rebalance UI
 │   ├── ReceiptCard.tsx            # Post-tx receipt with Solscan link
 │   ├── MultiStepPreview.tsx       # Multi-step transaction progress
-│   ├── Sidebar.tsx                # Balance, quick actions, sessions
-│   └── three/                     # WalletOrb (R3F) + Scene
+│   └── Sidebar.tsx                # Balance, quick actions, sessions
 ├── hooks/
 │   ├── useWalletBalance.ts
 │   ├── useTransactionHistory.ts
@@ -275,30 +273,39 @@ Solace is a deliberate showcase of what Solana enables that other chains don't:
 - **Sub-second finality** is what makes a chat or voice command *feel* like a wallet command instead of a delayed write to a queue. The AI Wallet Guard scan is over before the user has lifted their finger.
 - **Jupiter** turns "best-execution swap routing" into a single REST call — no manual liquidity-pool selection, no MEV anxiety.
 - **Versioned Transactions + address-lookup tables** keep complex multi-step intents inside a single signed payload.
+- **SPL tokens, Bonfida `.sol` domains, and compute-budget priority fees on mainnet** are all wired in — every Solana primitive that mattered for the experience is there, not stubbed.
 
 ---
 
-## 🏆 For the judges
+## 🛠️ What's in the box
 
-Mapped against the MLH AI Hackfest Solana-track judging criteria:
+Solace ships the full loop end-to-end. On devnet, chat → parse → build → scan → preview → sign → broadcast → receipt works today for SOL and SPL transfers. On mainnet-beta, the Jupiter v6 swap path runs the same round trip — quote, preview, execute, receipt. Alongside the MVP set, there are eight larger features already landed: the autonomous portfolio manager, the AI Wallet Guard, multi-step command chaining, scheduled and recurring payments, an address book with `.sol` resolution, voice input, per-wallet chat session persistence, and an opt-in auto-approve mode.
 
-### ✅ Completion
-Every MVP feature ships, plus eight bonus features (autonomous portfolio manager, AI Wallet Guard, multi-step chaining, scheduled payments, address book with `.sol` resolution, voice input, chat session persistence, auto-approve mode). The full chat → parse → build → scan → preview → sign → broadcast → receipt loop runs end-to-end on devnet today, and the Jupiter swap path runs end-to-end on mainnet-beta.
+The combination is what makes Solace unusual. Most natural-language wallet projects stop at "parse a send command." Solace pairs intent parsing across 15+ action types with an *autonomous* portfolio rebalancer that takes action without prompting, and a Claude-powered security layer that inspects every transaction *before* signing. Autonomy on one side, safety on the other, with plain-English commands as the connective tissue.
 
-### 💡 Originality
-We haven't seen a hackathon wallet that combines all three of: (1) natural-language intent parsing across 15+ action types, (2) an *autonomous* portfolio rebalancer that takes action without user prompting, and (3) a Claude-powered security analysis layer that inspects every transaction *before* signing. Most NL-wallet projects stop at "parse a send command." Solace closes the loop on both ends — autonomy on one side, safety on the other.
+---
 
-### 🎯 Adherence to Theme — Solana
-Solace is a love letter to what Solana does well. Sub-cent fees turn AI-driven rebalancing from a thought experiment into a product. Sub-second finality turns chat and voice into first-class transaction surfaces. Jupiter v6 gives us best-execution swaps without a custom router. SPL tokens, `.sol` domains via Bonfida, VersionedTransactions, priority-fee compute budgets — every Solana primitive that mattered for the experience is wired in.
+## 🔧 Under the hood
 
-### 📚 Learning
-Genuine new ground for the team: VersionedTransactions and address-lookup tables, SPL `createTransferCheckedInstruction`, the Jupiter price-API workaround (1-unit quotes against USDC since the lite API has no `/price/v2`), Bonfida name-service resolution, Claude tool-use prompting at the JSON-schema level, React Three Fiber for the wallet orb, and Turso/libSQL running inside Next.js App Router API routes (with a local-file fallback for dev).
+A few engineering notes on how Solace is put together:
 
-### 🎨 Design
-A chat-first interface that hides the complexity instead of celebrating it. State-driven 3D orb (idle / processing / confirmed / error / scanning). The cyan AI Wallet Guard scan overlay turns a security check into a moment of theatre rather than a friction point. Animated drift bars in the portfolio card. A calm dark palette and motion language built with `motion/react` — no dashboards, no candle charts, no "DeFi-bro" energy.
+- **15+ intent types** with strict JSON contracts and discriminated unions — `send`, `swap`, `multi_step`, `set_portfolio`, `schedule`, and friends all route through a single parser and a single transaction builder.
+- **VersionedTransactions + address-lookup tables** for every outbound transaction, so complex multi-step intents stay inside a single signed payload.
+- **SPL transfers via `createTransferCheckedInstruction`**, with SOL, USDC, USDT, BONK, and JUP in the token registry.
+- **Jupiter v6 integration** with quote previews, slippage controls, and base64 `VersionedTransaction` deserialisation.
+- **Jupiter price-API workaround** — the lite API has no `/price/v2`, so `lib/portfolioManager.ts` derives token prices by requesting 1-unit quotes against USDC.
+- **Bonfida name-service resolution** so `.sol` names become public keys before a transfer is ever built.
+- **Claude tool-use at the JSON-schema level**, with a single system prompt driving every intent type and a separate prompt driving the rebalancer.
+- **30-second autonomous polling loop** that fetches prices, computes drift, calls Claude for swap instructions, and executes sequentially.
+- **AI Wallet Guard** — consumes the decoded transaction context, returns a risk score with warnings, persists caution/danger results to libSQL. Stale scan responses are cancelled via `AbortController` when the preview changes.
+- **Turso / libSQL inside Next.js App Router API routes**, with a local-file fallback for dev (same `@libsql/client` driver for both).
+- **Compute-budget priority fees** on mainnet.
 
-### 🔬 Technology
-15+ Claude-driven intent types with strict JSON contracts and discriminated unions. A live Jupiter v6 integration with quote previews, slippage controls, and base64 deserialisation. A 30-second autonomous polling loop that fetches prices, computes drift, calls Claude for swap instructions, and executes sequentially. An AI security layer that consumes the decoded transaction context, returns a risk score with warnings, and persists threats to SQLite. SOL transfers, SPL transfers, `.sol` domain resolution, and Jupiter swaps all backed by a single transaction builder. Compute-budget priority fees on mainnet. Stale-scan abort handling via `AbortController`. It is, frankly, a lot to fit in a hackathon.
+---
+
+## 🎨 Design notes
+
+Chat-first UI that hides the complexity instead of celebrating it. The cyan AI Wallet Guard scan overlay turns a security check into a moment of theatre rather than a friction point. Animated drift bars in the portfolio card. A calm dark palette and motion language built with `motion/react` — no dashboards, no candle charts, no "DeFi-bro" energy.
 
 ---
 
