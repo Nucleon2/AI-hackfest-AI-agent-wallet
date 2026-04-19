@@ -134,18 +134,19 @@ export async function POST(req: NextRequest) {
   // Log caution and danger to threat_log
   if (analysis.riskLevel !== "safe") {
     try {
-      const db = getDb();
-      db.prepare(
-        `INSERT INTO threat_log (id, wallet_pubkey, tx_context, risk_level, analysis_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).run(
-        crypto.randomUUID(),
-        walletPubkey,
-        JSON.stringify(txContext),
-        analysis.riskLevel,
-        JSON.stringify(analysis),
-        Date.now()
-      );
+      const db = await getDb();
+      await db.execute({
+        sql: `INSERT INTO threat_log (id, wallet_pubkey, tx_context, risk_level, analysis_json, created_at)
+              VALUES (?, ?, ?, ?, ?, ?)`,
+        args: [
+          crypto.randomUUID(),
+          walletPubkey,
+          JSON.stringify(txContext),
+          analysis.riskLevel,
+          JSON.stringify(analysis),
+          Date.now(),
+        ],
+      });
     } catch {
       // DB write failure must not block signing
     }

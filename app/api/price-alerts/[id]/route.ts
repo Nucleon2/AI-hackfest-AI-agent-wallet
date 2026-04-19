@@ -23,9 +23,12 @@ async function authorize(
     };
   }
 
-  const row = getDb()
-    .prepare("SELECT * FROM price_alerts WHERE id = ?")
-    .get(id) as PriceAlert | undefined;
+  const db = await getDb();
+  const res = await db.execute({
+    sql: "SELECT * FROM price_alerts WHERE id = ?",
+    args: [id],
+  });
+  const row = res.rows[0] as unknown as PriceAlert | undefined;
 
   if (!row) {
     return {
@@ -56,7 +59,11 @@ export async function DELETE(
   const auth = await authorize(req, id);
   if (!auth.ok) return auth.response;
 
-  getDb().prepare("DELETE FROM price_alerts WHERE id = ?").run(id);
+  const db = await getDb();
+  await db.execute({
+    sql: "DELETE FROM price_alerts WHERE id = ?",
+    args: [id],
+  });
   return NextResponse.json({ success: true });
 }
 
@@ -69,15 +76,17 @@ export async function PATCH(
   if (!auth.ok) return auth.response;
 
   const now = Date.now();
-  getDb()
-    .prepare(
-      `UPDATE price_alerts SET is_triggered = 1, triggered_at = ? WHERE id = ?`
-    )
-    .run(now, id);
+  const db = await getDb();
+  await db.execute({
+    sql: "UPDATE price_alerts SET is_triggered = 1, triggered_at = ? WHERE id = ?",
+    args: [now, id],
+  });
 
-  const updated = getDb()
-    .prepare("SELECT * FROM price_alerts WHERE id = ?")
-    .get(id) as PriceAlert;
+  const res = await db.execute({
+    sql: "SELECT * FROM price_alerts WHERE id = ?",
+    args: [id],
+  });
+  const updated = res.rows[0] as unknown as PriceAlert;
 
   return NextResponse.json({ success: true, data: updated });
 }

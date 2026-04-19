@@ -2,6 +2,9 @@
   "name": "ai-agent-wallet",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -11,6 +14,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
     "@base-ui/react": "^1.4.0",
+    "@libsql/client": "^0.17.2",
     "@marinade.finance/marinade-ts-sdk": "^5.0.18",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
@@ -20,7 +24,6 @@
     "@solana/wallet-adapter-react": "^0.15.39",
     "@solana/wallet-adapter-react-ui": "^0.9.39",
     "@solana/web3.js": "^1.98.4",
-    "better-sqlite3": "^12.9.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",
@@ -37,7 +40,6 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",

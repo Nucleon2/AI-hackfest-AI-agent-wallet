@@ -16,11 +16,12 @@ export async function PATCH(
   if (typeof body.title !== "string" || !body.title) {
     return NextResponse.json({ success: false, error: "title is required" }, { status: 400 });
   }
-  const db = getDb();
-  const result = db
-    .prepare("UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?")
-    .run(body.title, Date.now(), params.sessionId);
-  if (result.changes === 0) {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: "UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?",
+    args: [body.title, Date.now(), params.sessionId],
+  });
+  if (result.rowsAffected === 0) {
     return NextResponse.json({ success: false, error: "Session not found" }, { status: 404 });
   }
   return NextResponse.json({ success: true });
@@ -34,11 +35,12 @@ export async function DELETE(
   if (!wallet) {
     return NextResponse.json({ success: false, error: "wallet is required" }, { status: 400 });
   }
-  const db = getDb();
-  const result = db
-    .prepare("DELETE FROM chat_sessions WHERE id = ? AND wallet_pubkey = ?")
-    .run(params.sessionId, wallet);
-  if (result.changes === 0) {
+  const db = await getDb();
+  const result = await db.execute({
+    sql: "DELETE FROM chat_sessions WHERE id = ? AND wallet_pubkey = ?",
+    args: [params.sessionId, wallet],
+  });
+  if (result.rowsAffected === 0) {
     return NextResponse.json({ success: false, error: "Session not found" }, { status: 404 });
   }
   return NextResponse.json({ success: true });

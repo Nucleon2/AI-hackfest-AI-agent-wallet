@@ -22,9 +22,12 @@ export async function POST(
     );
   }
 
-  const row = getDb()
-    .prepare("SELECT * FROM dca_orders WHERE id = ?")
-    .get(id) as DCAOrder | undefined;
+  const db = await getDb();
+  const lookup = await db.execute({
+    sql: "SELECT * FROM dca_orders WHERE id = ?",
+    args: [id],
+  });
+  const row = lookup.rows[0] as unknown as DCAOrder | undefined;
 
   if (!row) {
     return NextResponse.json(
@@ -39,9 +42,10 @@ export async function POST(
     );
   }
 
-  getDb()
-    .prepare("UPDATE dca_orders SET is_active = 0 WHERE id = ?")
-    .run(id);
+  await db.execute({
+    sql: "UPDATE dca_orders SET is_active = 0 WHERE id = ?",
+    args: [id],
+  });
 
   return NextResponse.json({ success: true });
 }

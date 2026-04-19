@@ -22,9 +22,12 @@ export async function POST(
     );
   }
 
-  const row = getDb()
-    .prepare("SELECT * FROM scheduled_payments WHERE id = ?")
-    .get(id) as ScheduledPayment | undefined;
+  const db = await getDb();
+  const lookup = await db.execute({
+    sql: "SELECT * FROM scheduled_payments WHERE id = ?",
+    args: [id],
+  });
+  const row = lookup.rows[0] as unknown as ScheduledPayment | undefined;
 
   if (!row) {
     return NextResponse.json(
@@ -39,11 +42,10 @@ export async function POST(
     );
   }
 
-  getDb()
-    .prepare(
-      "UPDATE scheduled_payments SET status = 'cancelled' WHERE id = ?"
-    )
-    .run(id);
+  await db.execute({
+    sql: "UPDATE scheduled_payments SET status = 'cancelled' WHERE id = ?",
+    args: [id],
+  });
 
   return NextResponse.json({ success: true });
 }

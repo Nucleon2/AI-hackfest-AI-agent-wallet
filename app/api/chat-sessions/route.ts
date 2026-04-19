@@ -8,10 +8,12 @@ export async function GET(req: NextRequest) {
   if (!wallet) {
     return NextResponse.json({ success: false, error: "wallet is required" }, { status: 400 });
   }
-  const db = getDb();
-  const sessions = db
-    .prepare("SELECT * FROM chat_sessions WHERE wallet_pubkey = ? ORDER BY updated_at DESC")
-    .all(wallet) as ChatSessionRow[];
+  const db = await getDb();
+  const res = await db.execute({
+    sql: "SELECT * FROM chat_sessions WHERE wallet_pubkey = ? ORDER BY updated_at DESC",
+    args: [wallet],
+  });
+  const sessions = res.rows as unknown as ChatSessionRow[];
   return NextResponse.json({ success: true, data: sessions });
 }
 
@@ -33,10 +35,10 @@ export async function POST(req: NextRequest) {
     created_at: now,
     updated_at: now,
   };
-  getDb()
-    .prepare(
-      "INSERT INTO chat_sessions (id, wallet_pubkey, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
-    )
-    .run(session.id, session.wallet_pubkey, session.title, session.created_at, session.updated_at);
+  const db = await getDb();
+  await db.execute({
+    sql: "INSERT INTO chat_sessions (id, wallet_pubkey, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+    args: [session.id, session.wallet_pubkey, session.title, session.created_at, session.updated_at],
+  });
   return NextResponse.json({ success: true, data: session });
 }

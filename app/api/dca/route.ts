@@ -24,13 +24,14 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const rows = getDb()
-    .prepare(
-      `SELECT * FROM dca_orders
-       WHERE wallet_pubkey = ? AND is_active = 1
-       ORDER BY next_run_at ASC`
-    )
-    .all(wallet) as DCAOrder[];
+  const db = await getDb();
+  const res = await db.execute({
+    sql: `SELECT * FROM dca_orders
+          WHERE wallet_pubkey = ? AND is_active = 1
+          ORDER BY next_run_at ASC`,
+    args: [wallet],
+  });
+  const rows = res.rows as unknown as DCAOrder[];
 
   return NextResponse.json({ success: true, data: rows });
 }
@@ -112,7 +113,7 @@ export async function POST(req: NextRequest) {
       }
       dayOfWeek = parsed;
     } else {
-      dayOfWeek = 1; // Monday default — persisted so the stored order matches what will run
+      dayOfWeek = 1;
     }
   }
   const nowMs = Date.now();
@@ -134,18 +135,29 @@ export async function POST(req: NextRequest) {
     last_executed_at: null,
   };
 
-  getDb()
-    .prepare(
-      `INSERT INTO dca_orders
-       (id, wallet_pubkey, input_token, output_token, amount_usd, interval,
-        day_of_week, next_run_at, runs_completed, max_runs, is_active,
-        created_at, last_executed_at)
-       VALUES
-       (@id, @wallet_pubkey, @input_token, @output_token, @amount_usd, @interval,
-        @day_of_week, @next_run_at, @runs_completed, @max_runs, @is_active,
-        @created_at, @last_executed_at)`
-    )
-    .run(row);
+  const db = await getDb();
+  await db.execute({
+    sql: `INSERT INTO dca_orders
+          (id, wallet_pubkey, input_token, output_token, amount_usd, interval,
+           day_of_week, next_run_at, runs_completed, max_runs, is_active,
+           created_at, last_executed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      row.id,
+      row.wallet_pubkey,
+      row.input_token,
+      row.output_token,
+      row.amount_usd,
+      row.interval,
+      row.day_of_week,
+      row.next_run_at,
+      row.runs_completed,
+      row.max_runs,
+      row.is_active,
+      row.created_at,
+      row.last_executed_at,
+    ],
+  });
 
   return NextResponse.json({ success: true, data: row });
 }

@@ -84,7 +84,7 @@
 │   ├── tokenRegistry.ts          # Supported tokens: SOL, USDC, USDT, BONK, JUP
 │   ├── portfolioManager.ts       # Price fetching, allocation math, Claude rebalance call
 │   ├── scheduleUtils.ts          # Compute first/next execution times
-│   ├── db.ts                     # SQLite schema (better-sqlite3, WAL mode)
+│   ├── db.ts                     # libSQL client + schema (@libsql/client; local file in dev, Turso in prod)
 │   └── stores/
 │       └── chatSessionStore.ts   # Zustand store for active chat session
 ├── types/

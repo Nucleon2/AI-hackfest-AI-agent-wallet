@@ -25,13 +25,14 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const rows = getDb()
-    .prepare(
-      `SELECT * FROM scheduled_payments
-       WHERE wallet_pubkey = ? AND status = 'active'
-       ORDER BY next_execution_at ASC`
-    )
-    .all(wallet) as ScheduledPayment[];
+  const db = await getDb();
+  const res = await db.execute({
+    sql: `SELECT * FROM scheduled_payments
+          WHERE wallet_pubkey = ? AND status = 'active'
+          ORDER BY next_execution_at ASC`,
+    args: [wallet],
+  });
+  const rows = res.rows as unknown as ScheduledPayment[];
 
   return NextResponse.json({ success: true, data: rows });
 }
@@ -119,18 +120,30 @@ export async function POST(req: NextRequest) {
     status: "active",
   };
 
-  getDb()
-    .prepare(
-      `INSERT INTO scheduled_payments
-       (id, wallet_pubkey, recipient, amount_sol, token, frequency,
-        day_of_week, day_of_month, label, created_at, next_execution_at,
-        last_executed_at, execution_count, status)
-       VALUES
-       (@id, @wallet_pubkey, @recipient, @amount_sol, @token, @frequency,
-        @day_of_week, @day_of_month, @label, @created_at, @next_execution_at,
-        @last_executed_at, @execution_count, @status)`
-    )
-    .run(row);
+  const db = await getDb();
+  await db.execute({
+    sql: `INSERT INTO scheduled_payments
+          (id, wallet_pubkey, recipient, amount_sol, token, frequency,
+           day_of_week, day_of_month, label, created_at, next_execution_at,
+           last_executed_at, execution_count, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      row.id,
+      row.wallet_pubkey,
+      row.recipient,
+      row.amount_sol,
+      row.token,
+      row.frequency,
+      row.day_of_week,
+      row.day_of_month,
+      row.label ?? null,
+      row.created_at,
+      row.next_execution_at,
+      row.last_executed_at,
+      row.execution_count,
+      row.status,
+    ],
+  });
 
   return NextResponse.json({ success: true, data: row });
 }

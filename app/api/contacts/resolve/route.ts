@@ -22,10 +22,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Invalid wallet address." }, { status: 400 });
   }
 
-  const db = getDb();
-  const row = db
-    .prepare("SELECT * FROM contacts WHERE wallet_pubkey = ? AND name = ? COLLATE NOCASE")
-    .get(wallet, name) as Contact | undefined;
+  const db = await getDb();
+  const res = await db.execute({
+    sql: "SELECT * FROM contacts WHERE wallet_pubkey = ? AND name = ? COLLATE NOCASE",
+    args: [wallet, name],
+  });
+  const row = res.rows[0] as unknown as Contact | undefined;
 
   if (!row) {
     return NextResponse.json(

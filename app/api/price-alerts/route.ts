@@ -28,7 +28,9 @@ export async function GET(req: NextRequest) {
     ? `SELECT * FROM price_alerts WHERE wallet_pubkey = ? ORDER BY created_at DESC`
     : `SELECT * FROM price_alerts WHERE wallet_pubkey = ? AND is_triggered = 0 ORDER BY created_at DESC`;
 
-  const rows = getDb().prepare(sql).all(wallet) as PriceAlert[];
+  const db = await getDb();
+  const res = await db.execute({ sql, args: [wallet] });
+  const rows = res.rows as unknown as PriceAlert[];
   return NextResponse.json({ success: true, data: rows });
 }
 
@@ -154,16 +156,29 @@ export async function POST(req: NextRequest) {
     label: alert.label ?? null,
   };
 
-  getDb()
-    .prepare(
-      `INSERT INTO price_alerts
-       (id, wallet_pubkey, token, target_price, direction, is_triggered, created_at, triggered_at,
-        action_type, swap_from_token, swap_to_token, swap_amount_pct, swap_amount_fixed, label)
-       VALUES
-       (@id, @wallet_pubkey, @token, @target_price, @direction, @is_triggered, @created_at, @triggered_at,
-        @action_type, @swap_from_token, @swap_to_token, @swap_amount_pct, @swap_amount_fixed, @label)`
-    )
-    .run(row);
+  const db = await getDb();
+  await db.execute({
+    sql: `INSERT INTO price_alerts
+          (id, wallet_pubkey, token, target_price, direction, is_triggered, created_at, triggered_at,
+           action_type, swap_from_token, swap_to_token, swap_amount_pct, swap_amount_fixed, label)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      row.id,
+      row.wallet_pubkey,
+      row.token,
+      row.target_price,
+      row.direction,
+      row.is_triggered,
+      row.created_at,
+      row.triggered_at,
+      row.action_type,
+      row.swap_from_token,
+      row.swap_to_token,
+      row.swap_amount_pct,
+      row.swap_amount_fixed,
+      row.label,
+    ],
+  });
 
   return NextResponse.json({ success: true, data: row });
 }
