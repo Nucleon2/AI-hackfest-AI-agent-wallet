@@ -73,10 +73,10 @@ A walkthrough of what Solace actually does end-to-end:
 
 ```mermaid
 flowchart TD
-    A[User types or speaks a command] --> B[/api/parse-intent]
+    A[User types or speaks a command] --> B["/api/parse-intent"]
     B --> C[Claude Haiku 4.5<br/>structured Intent JSON]
     C --> D[transactionBuilder.ts<br/>VersionedTransaction]
-    D --> E[/api/analyze-transaction]
+    D --> E["/api/analyze-transaction"]
     E --> F[AI Wallet Guard<br/>risk score + warnings]
     F --> G[SecurityScanOverlay<br/>cyan animated sweep]
     G --> H[TransactionPreview modal<br/>with risk badge]
@@ -90,10 +90,10 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A[usePortfolioManager hook<br/>polls every 30s] --> B[/api/portfolio/status]
+    A[usePortfolioManager hook<br/>polls every 30s] --> B["/api/portfolio/status"]
     B --> C[Jupiter quotes for live prices<br/>+ on-chain balances]
     C --> D{maxDrift ≥ threshold?}
-    D -->|yes| E[/api/portfolio/rebalance]
+    D -->|yes| E["/api/portfolio/rebalance"]
     E --> F[Claude decides swap instructions]
     F --> G{auto_execute?}
     G -->|on| H[Sequential Jupiter swaps<br/>receipts post to chat]
