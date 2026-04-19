@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3001";
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 // Use a throwaway-but-valid base58 wallet (the system program id) for DB writes
 const TEST_WALLET = "11111111111111111111111111111112";
 // Claude-backed tests are skipped when the key is absent so CI/dev without
