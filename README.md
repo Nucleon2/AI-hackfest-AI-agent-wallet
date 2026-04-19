@@ -117,7 +117,7 @@ flowchart LR
 | SOL domains | [`@bonfida/spl-name-service`](https://github.com/Bonfida/bonfida-utils) |
 | Token swaps | [Jupiter Aggregator API v6](https://station.jup.ag/docs/apis/swap-api) |
 | AI layer | [Anthropic Claude](https://www.anthropic.com) — `claude-haiku-4-5-20251001` |
-| Persistence | [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) (WAL mode) |
+| Persistence | [Turso](https://turso.tech) / libSQL via [`@libsql/client`](https://github.com/tursodatabase/libsql-client-ts) (local file in dev, serverless HTTP in production) |
 | State | [Zustand](https://github.com/pmndrs/zustand) |
 | Testing | [Playwright](https://playwright.dev) |
 | Deployment | [Vercel](https://vercel.com) |
@@ -160,8 +160,48 @@ Open <http://localhost:3000>, connect your wallet, and start typing.
 | `ANTHROPIC_API_KEY` | ✅ | Server-only Claude key. Powers intent parsing, the Wallet Guard, and the portfolio rebalancer. |
 | `NEXT_PUBLIC_SOLANA_RPC_URL` | ✅ | Defaults to `https://api.devnet.solana.com`. Swap for a Helius/QuickNode mainnet URL to run live swaps. |
 | `NEXT_PUBLIC_SOLANA_NETWORK` | ✅ | `devnet` or `mainnet-beta`. Controls the network label shown in the UI. |
+| `TURSO_DATABASE_URL` | Prod only | Turso libSQL connection URL. Leave blank in dev — the app writes to `./db/schedules.db`. |
+| `TURSO_AUTH_TOKEN` | Prod only | Turso auth token paired with the URL above. |
 
 > **Devnet vs mainnet.** SOL transfers, contacts, scheduling, and the AI Wallet Guard all work on **devnet**. Jupiter swaps only execute on **mainnet-beta** — on devnet the preview modal shows an inline notice instead of calling the aggregator.
+
+---
+
+## ☁️ Deploying to Vercel
+
+The app is designed for a zero-friction Vercel deploy. The only architectural wrinkle Vercel introduces is that its serverless filesystem is ephemeral, so persistence runs against a **hosted libSQL database (Turso)** in production and a local file in development — the same `@libsql/client` driver speaks both.
+
+### 1. Provision a Turso database
+
+```bash
+# Install the Turso CLI (https://docs.turso.tech/cli/installation)
+turso auth signup            # or: turso auth login
+turso db create solace       # creates the database
+turso db show solace --url   # copy this → TURSO_DATABASE_URL
+turso db tokens create solace # copy this → TURSO_AUTH_TOKEN
+```
+
+No schema migration step is required — `lib/db.ts` runs `CREATE TABLE IF NOT EXISTS` on first request.
+
+### 2. Set Vercel environment variables
+
+In **Project Settings → Environment Variables** (Production + Preview), add:
+
+| Key | Value |
+|---|---|
+| `ANTHROPIC_API_KEY` | Your Claude key from [console.anthropic.com](https://console.anthropic.com) |
+| `NEXT_PUBLIC_SOLANA_RPC_URL` | A **private mainnet** RPC URL (Helius / QuickNode). The public `api.mainnet-beta.solana.com` URL will rate-limit during the demo. |
+| `NEXT_PUBLIC_SOLANA_NETWORK` | `mainnet-beta` |
+| `TURSO_DATABASE_URL` | From step 1 |
+| `TURSO_AUTH_TOKEN` | From step 1 |
+
+### 3. Deploy
+
+Push to GitHub, import the repo in the Vercel dashboard, and click **Deploy**. No custom build or install command is needed — Vercel detects Next.js 14 automatically. Node 20+ is enforced via `package.json#engines`.
+
+### Verifying persistence survives redeploys
+
+Connect a wallet, save a contact (e.g. `"save <address> as test"`), trigger another deploy from the Vercel dashboard, and confirm the contact is still there. This is the canary: if it persists, every other table (schedules, portfolio configs, DCA orders, price alerts, threat log, chat sessions + messages) does too.
 
 ### Tests
 
@@ -216,7 +256,7 @@ End-to-end tests live in `tests/` (`portfolio-manager.spec.ts`, `staking.spec.ts
 │   ├── solanaClient.ts            # RPC connection
 │   ├── tokenRegistry.ts           # SOL, USDC, USDT, BONK, JUP
 │   ├── portfolioManager.ts        # Pricing, allocation math, Claude call
-│   ├── db.ts                      # SQLite schema
+│   ├── db.ts                      # libSQL client + schema
 │   └── stores/chatSessionStore.ts # Zustand
 ├── types/                         # Intent / Schedule / Contact types
 ├── tests/                         # Playwright e2e
@@ -252,7 +292,7 @@ We haven't seen a hackathon wallet that combines all three of: (1) natural-langu
 Solace is a love letter to what Solana does well. Sub-cent fees turn AI-driven rebalancing from a thought experiment into a product. Sub-second finality turns chat and voice into first-class transaction surfaces. Jupiter v6 gives us best-execution swaps without a custom router. SPL tokens, `.sol` domains via Bonfida, VersionedTransactions, priority-fee compute budgets — every Solana primitive that mattered for the experience is wired in.
 
 ### 📚 Learning
-Genuine new ground for the team: VersionedTransactions and address-lookup tables, SPL `createTransferCheckedInstruction`, the Jupiter price-API workaround (1-unit quotes against USDC since the lite API has no `/price/v2`), Bonfida name-service resolution, Claude tool-use prompting at the JSON-schema level, React Three Fiber for the wallet orb, and `better-sqlite3` in WAL mode running inside Next.js API routes.
+Genuine new ground for the team: VersionedTransactions and address-lookup tables, SPL `createTransferCheckedInstruction`, the Jupiter price-API workaround (1-unit quotes against USDC since the lite API has no `/price/v2`), Bonfida name-service resolution, Claude tool-use prompting at the JSON-schema level, React Three Fiber for the wallet orb, and Turso/libSQL running inside Next.js App Router API routes (with a local-file fallback for dev).
 
 ### 🎨 Design
 A chat-first interface that hides the complexity instead of celebrating it. State-driven 3D orb (idle / processing / confirmed / error / scanning). The cyan AI Wallet Guard scan overlay turns a security check into a moment of theatre rather than a friction point. Animated drift bars in the portfolio card. A calm dark palette and motion language built with `motion/react` — no dashboards, no candle charts, no "DeFi-bro" energy.
