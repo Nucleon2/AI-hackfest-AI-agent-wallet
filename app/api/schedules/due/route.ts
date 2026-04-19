@@ -23,16 +23,17 @@ export async function GET(req: NextRequest) {
   }
 
   const now = Date.now();
-  const rows = getDb()
-    .prepare(
-      `SELECT * FROM scheduled_payments
-       WHERE wallet_pubkey = ?
-         AND status = 'active'
-         AND next_execution_at <= ?
-       ORDER BY next_execution_at ASC
-       LIMIT 1`
-    )
-    .all(wallet, now) as ScheduledPayment[];
+  const db = await getDb();
+  const res = await db.execute({
+    sql: `SELECT * FROM scheduled_payments
+          WHERE wallet_pubkey = ?
+            AND status = 'active'
+            AND next_execution_at <= ?
+          ORDER BY next_execution_at ASC
+          LIMIT 1`,
+    args: [wallet, now],
+  });
+  const rows = res.rows as unknown as ScheduledPayment[];
 
   return NextResponse.json({ success: true, data: rows });
 }

@@ -26,9 +26,12 @@ export async function POST(
     );
   }
 
-  const row = getDb()
-    .prepare("SELECT * FROM scheduled_payments WHERE id = ?")
-    .get(id) as ScheduledPayment | undefined;
+  const db = await getDb();
+  const lookup = await db.execute({
+    sql: "SELECT * FROM scheduled_payments WHERE id = ?",
+    args: [id],
+  });
+  const row = lookup.rows[0] as unknown as ScheduledPayment | undefined;
 
   if (!row) {
     return NextResponse.json(
@@ -47,26 +50,26 @@ export async function POST(
   const nextMs = computeNextExecutionAt(row);
 
   if (nextMs === null) {
-    getDb()
-      .prepare(
-        `UPDATE scheduled_payments
-         SET status = 'completed', last_executed_at = ?, execution_count = execution_count + 1
-         WHERE id = ?`
-      )
-      .run(now, id);
+    await db.execute({
+      sql: `UPDATE scheduled_payments
+            SET status = 'completed', last_executed_at = ?, execution_count = execution_count + 1
+            WHERE id = ?`,
+      args: [now, id],
+    });
   } else {
-    getDb()
-      .prepare(
-        `UPDATE scheduled_payments
-         SET next_execution_at = ?, last_executed_at = ?, execution_count = execution_count + 1
-         WHERE id = ?`
-      )
-      .run(nextMs, now, id);
+    await db.execute({
+      sql: `UPDATE scheduled_payments
+            SET next_execution_at = ?, last_executed_at = ?, execution_count = execution_count + 1
+            WHERE id = ?`,
+      args: [nextMs, now, id],
+    });
   }
 
-  const updated = getDb()
-    .prepare("SELECT * FROM scheduled_payments WHERE id = ?")
-    .get(id) as ScheduledPayment;
+  const updatedRes = await db.execute({
+    sql: "SELECT * FROM scheduled_payments WHERE id = ?",
+    args: [id],
+  });
+  const updated = updatedRes.rows[0] as unknown as ScheduledPayment;
 
   return NextResponse.json({ success: true, data: updated });
 }

@@ -17,10 +17,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Invalid wallet address." }, { status: 400 });
   }
 
-  const db = getDb();
-  const rows = db
-    .prepare("SELECT * FROM contacts WHERE wallet_pubkey = ? ORDER BY name COLLATE NOCASE ASC")
-    .all(wallet) as Contact[];
+  const db = await getDb();
+  const res = await db.execute({
+    sql: "SELECT * FROM contacts WHERE wallet_pubkey = ? ORDER BY name COLLATE NOCASE ASC",
+    args: [wallet],
+  });
+  const rows = res.rows as unknown as Contact[];
 
   return NextResponse.json({ success: true, data: rows });
 }
@@ -59,20 +61,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const db = getDb();
+  const db = await getDb();
   const id = crypto.randomUUID();
   const now = Date.now();
 
-  // INSERT OR REPLACE gives upsert semantics — updating address if name already exists
-  db.prepare(
-    `INSERT INTO contacts (id, wallet_pubkey, name, address, created_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(wallet_pubkey, name) DO UPDATE SET address = excluded.address`
-  ).run(id, walletPubkey, name, address, now);
+  await db.execute({
+    sql: `INSERT INTO contacts (id, wallet_pubkey, name, address, created_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(wallet_pubkey, name) DO UPDATE SET address = excluded.address`,
+    args: [id, walletPubkey, name, address, now],
+  });
 
-  const saved = db
-    .prepare("SELECT * FROM contacts WHERE wallet_pubkey = ? AND name = ? COLLATE NOCASE")
-    .get(walletPubkey, name) as Contact;
+  const savedRes = await db.execute({
+    sql: "SELECT * FROM contacts WHERE wallet_pubkey = ? AND name = ? COLLATE NOCASE",
+    args: [walletPubkey, name],
+  });
+  const saved = savedRes.rows[0] as unknown as Contact;
 
   return NextResponse.json({ success: true, data: saved });
 }

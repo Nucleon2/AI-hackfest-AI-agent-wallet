@@ -31,10 +31,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: "wallet is required" }, { status: 400 });
   }
 
-  const db = getDb();
-  const row = db
-    .prepare("SELECT * FROM portfolio_configs WHERE wallet_pubkey = ? AND is_active = 1")
-    .get(wallet) as PortfolioConfigRow | undefined;
+  const db = await getDb();
+  const res = await db.execute({
+    sql: "SELECT * FROM portfolio_configs WHERE wallet_pubkey = ? AND is_active = 1",
+    args: [wallet],
+  });
+  const row = res.rows[0] as unknown as PortfolioConfigRow | undefined;
 
   if (!row) {
     return NextResponse.json({ success: true, data: null });

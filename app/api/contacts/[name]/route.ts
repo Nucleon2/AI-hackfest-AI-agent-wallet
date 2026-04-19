@@ -21,12 +21,13 @@ export async function DELETE(
     return NextResponse.json({ success: false, error: "Invalid wallet address." }, { status: 400 });
   }
 
-  const db = getDb();
-  const result = db
-    .prepare("DELETE FROM contacts WHERE wallet_pubkey = ? AND name = ? COLLATE NOCASE")
-    .run(wallet, contactName);
+  const db = await getDb();
+  const result = await db.execute({
+    sql: "DELETE FROM contacts WHERE wallet_pubkey = ? AND name = ? COLLATE NOCASE",
+    args: [wallet, contactName],
+  });
 
-  if (result.changes === 0) {
+  if (result.rowsAffected === 0) {
     return NextResponse.json(
       { success: false, error: `Contact "${contactName}" not found.` },
       { status: 404 }
