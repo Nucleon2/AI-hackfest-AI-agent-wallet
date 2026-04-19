@@ -1,8 +1,8 @@
-# CLAUDE.md — AI Agent Wallet (Solana Hackathon)
+# CLAUDE.md — Solace (Solana Hackathon)
 
 ## Project Overview
 
-**Name:** AI Agent Wallet (working title — rename as desired)
+**Name:** Solace
 **Type:** Hackathon project — MLH AI Hackfest, Solana track
 **Goal:** A natural language-powered Solana wallet. Users type plain English commands ("Send 2 SOL to Ahmad.sol", "Swap 50 USDC for SOL", "Keep my portfolio 60% SOL 40% USDC") and the AI parses intent, builds the transaction, previews it, and executes on confirmation. Includes an autonomous portfolio manager that monitors drift and rebalances via Jupiter swaps without user intervention. Every transaction is scanned by an AI security guard before signing.
 **Target:** Win the Solana track by combining AI decision-making with Solana's speed and near-zero fees.

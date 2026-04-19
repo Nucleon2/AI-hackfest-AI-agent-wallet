@@ -9,7 +9,7 @@ test.describe("Portfolio Manager", () => {
     await page.goto(BASE_URL);
     await page.waitForLoadState("networkidle");
     // App should load with the welcome message
-    await expect(page.locator("text=AI Agent Wallet").first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("text=Solace").first()).toBeVisible({ timeout: 10_000 });
     expect(errors.filter((e) => !e.includes("ResizeObserver"))).toHaveLength(0);
   });
 

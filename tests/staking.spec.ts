@@ -9,7 +9,7 @@ test.describe("Liquid staking", () => {
     page.on("pageerror", (err) => errors.push(err.message));
     await page.goto(BASE_URL);
     await page.waitForLoadState("networkidle");
-    await expect(page.locator("text=AI Agent Wallet").first()).toBeVisible({
+    await expect(page.locator("text=Solace").first()).toBeVisible({
       timeout: 10_000,
     });
     // ignore noisy browser warnings unrelated to staking

@@ -16,7 +16,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "AI Agent Wallet",
+  title: "Solace",
   description: "Natural language Solana wallet",
 };
 

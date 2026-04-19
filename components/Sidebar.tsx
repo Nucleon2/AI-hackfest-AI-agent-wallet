@@ -305,7 +305,7 @@ export function Sidebar() {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
             <path d="M12 2L20.5 7V17L12 22L3.5 17V7L12 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
           </svg>
-          <span className="text-[10px] text-white tracking-wider">AI Agent Wallet</span>
+          <span className="text-[10px] text-white tracking-wider">Solace</span>
         </div>
         <p className="mt-1 text-[9px] text-white/20">Powered by Claude · Solana Devnet</p>
       </div>

@@ -61,7 +61,7 @@ export default function Home() {
               shimmerWidth={120}
               className="text-sm font-semibold text-white/80"
             >
-              AI Agent Wallet
+              Solace
             </AnimatedShinyText>
           </div>
 
