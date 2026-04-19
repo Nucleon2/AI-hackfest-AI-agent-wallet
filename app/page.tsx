@@ -41,7 +41,7 @@ export default function Home() {
       {/* App shell */}
       <div className="relative z-10 flex h-full flex-col">
         {/* Header */}
-        <header className="flex flex-shrink-0 items-center justify-between border-b border-white/[0.06] bg-black/30 px-6 py-3.5 backdrop-blur-xl">
+        <header className="relative z-20 flex flex-shrink-0 items-center justify-between border-b border-white/[0.06] bg-black/30 px-6 py-3.5 backdrop-blur-xl">
           <div className="flex items-center gap-3">
             {/* Logo mark */}
             <div className="relative flex h-8 w-8 items-center justify-center">
