@@ -6,6 +6,7 @@ import { MagicCard } from "@/components/ui/magic-card";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { networkLabel } from "@/lib/solanaClient";
 
 export function PortfolioCard() {
   const { connected, publicKey } = useWallet();
@@ -65,7 +66,7 @@ export function PortfolioCard() {
                   connected ? "bg-emerald-400" : "bg-white/20"
                 )}
               />
-              {connected ? "Devnet" : "Not connected"}
+              {connected ? networkLabel() : "Not connected"}
             </Badge>
 
             {shortAddress && (

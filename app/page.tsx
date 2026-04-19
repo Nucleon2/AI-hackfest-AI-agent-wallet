@@ -5,6 +5,7 @@ import { ChatInterface } from "@/components/ChatInterface";
 import { Sidebar } from "@/components/Sidebar";
 import { AnimatedGridPattern } from "@/components/ui/animated-grid-pattern";
 import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
+import { networkLabel } from "@/lib/solanaClient";
 
 export default function Home() {
   return (
@@ -69,7 +70,7 @@ export default function Home() {
           <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] px-3 py-1.5">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-[10px] font-medium text-white/40 tracking-wider uppercase">
-              Solana Devnet
+              {`Solana ${networkLabel()}`}
             </span>
           </div>
 

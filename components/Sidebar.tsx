@@ -12,6 +12,7 @@ import { NumberTicker } from "@/components/ui/number-ticker";
 import { Ripple } from "@/components/ui/ripple";
 import { BorderBeam } from "@/components/ui/border-beam";
 import { cn } from "@/lib/utils";
+import { networkLabel } from "@/lib/solanaClient";
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -109,7 +110,7 @@ export function Sidebar() {
                   connected ? "bg-emerald-400 animate-pulse" : "bg-white/20"
                 )}
               />
-              {connected ? "Devnet" : "Not connected"}
+              {connected ? networkLabel() : "Not connected"}
             </span>
           </div>
         </div>
@@ -307,7 +308,7 @@ export function Sidebar() {
           </svg>
           <span className="text-[10px] text-white tracking-wider">Solace</span>
         </div>
-        <p className="mt-1 text-[9px] text-white/20">Powered by Claude · Solana Devnet</p>
+        <p className="mt-1 text-[9px] text-white/20">{`Powered by Claude · Solana ${networkLabel()}`}</p>
       </div>
 
       <BorderBeam

@@ -16,3 +16,9 @@ export function solscanUrl(signature: string): string {
   if (SOLANA_NETWORK === "mainnet-beta") return base;
   return `${base}?cluster=${SOLANA_NETWORK}`;
 }
+
+export function networkLabel(): string {
+  if (SOLANA_NETWORK === "mainnet-beta") return "Mainnet";
+  if (SOLANA_NETWORK === "testnet") return "Testnet";
+  return "Devnet";
+}
