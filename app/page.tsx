@@ -74,7 +74,9 @@ export default function Home() {
             </span>
           </div>
 
-          <WalletConnectButton />
+          <div className="relative z-50">
+            <WalletConnectButton />
+          </div>
         </header>
 
         {/* Body: sidebar + chat */}

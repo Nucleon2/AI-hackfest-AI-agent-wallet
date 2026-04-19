@@ -125,3 +125,11 @@ body {
   animation: ripple 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   animation-delay: calc(var(--i, 0) * 0.5s);
 }
+
+/* Wallet adapter dropdown — raise above chat sub-header and app shell siblings */
+.wallet-adapter-dropdown {
+  z-index: 60;
+}
+.wallet-adapter-dropdown-list {
+  z-index: 60 !important;
+}
