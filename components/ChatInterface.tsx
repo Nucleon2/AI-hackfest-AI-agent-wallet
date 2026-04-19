@@ -197,6 +197,10 @@ function componentSummary(component: MessageComponent, msg: Message): string {
   }
 }
 
+function shouldBlockAutoApprove(analysis: TxAnalysis | null): boolean {
+  return analysis?.riskLevel === "danger" && analysis.analyzed === true;
+}
+
 function buildConversationHistory(msgs: Message[]): Array<{ role: "user" | "assistant"; content: string }> {
   return msgs
     .filter((m) => m.id !== "welcome")
@@ -308,6 +312,7 @@ export function ChatInterface() {
   const [securityAnalysis, setSecurityAnalysis] = useState<TxAnalysis | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const scanAbortRef = useRef<AbortController | null>(null);
+  const autoApproveBlockedRef = useRef<string | null>(null);
 
   const { schedules, duePayment, loading: schedulesLoading, refresh: refreshSchedules, clearDue } =
     useScheduledPayments(publicKey?.toBase58() ?? null);
@@ -1069,30 +1074,70 @@ export function ChatInterface() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stakePreviewStatus]);
 
-  // Auto-approve: fire confirm handlers as soon as preflight reaches "ready" (wait for scan)
+  // Auto-approve: fire confirm handlers as soon as preflight reaches "ready" (wait for scan).
+  // High-risk transactions (riskLevel === "danger") bypass auto-approve and require manual confirmation.
   useEffect(() => {
     if (pendingMultiStep) return; // multi-step has its own auto-approve below
-    if (autoApprove && previewStatus === "ready" && pendingSend && !isScanning) {
-      handleConfirmSend();
+    if (!(autoApprove && previewStatus === "ready" && pendingSend && !isScanning)) return;
+
+    if (shouldBlockAutoApprove(securityAnalysis)) {
+      const previewId = `send:${pendingSend.recipient}:${pendingSend.amount}:${pendingSend.token}`;
+      if (autoApproveBlockedRef.current !== previewId) {
+        autoApproveBlockedRef.current = previewId;
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: "⚠ AI Wallet Guard flagged this transaction as high-risk. Auto-approve was skipped — please review the details and confirm or cancel.",
+          ts: Date.now(),
+        });
+      }
+      return;
     }
+    handleConfirmSend();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, previewStatus, pendingSend, pendingMultiStep, isScanning]);
+  }, [autoApprove, previewStatus, pendingSend, pendingMultiStep, isScanning, securityAnalysis]);
 
   useEffect(() => {
     if (pendingMultiStep) return;
-    if (autoApprove && swapPreviewStatus === "ready" && pendingSwap && !isScanning) {
-      handleConfirmSwap();
+    if (!(autoApprove && swapPreviewStatus === "ready" && pendingSwap && !isScanning)) return;
+
+    if (shouldBlockAutoApprove(securityAnalysis)) {
+      const previewId = `swap:${pendingSwap.fromToken}:${pendingSwap.toToken}:${pendingSwap.amount}`;
+      if (autoApproveBlockedRef.current !== previewId) {
+        autoApproveBlockedRef.current = previewId;
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: "⚠ AI Wallet Guard flagged this swap as high-risk. Auto-approve was skipped — please review the details and confirm or cancel.",
+          ts: Date.now(),
+        });
+      }
+      return;
     }
+    handleConfirmSwap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, swapPreviewStatus, pendingSwap, pendingMultiStep, isScanning]);
+  }, [autoApprove, swapPreviewStatus, pendingSwap, pendingMultiStep, isScanning, securityAnalysis]);
 
   useEffect(() => {
     if (pendingMultiStep) return;
-    if (autoApprove && stakePreviewStatus === "ready" && pendingStake && !isScanning) {
-      handleConfirmStake();
+    if (!(autoApprove && stakePreviewStatus === "ready" && pendingStake && !isScanning)) return;
+
+    if (shouldBlockAutoApprove(securityAnalysis)) {
+      const previewId = `stake:${pendingStake.action}:${pendingStake.amount}:${pendingStake.provider}`;
+      if (autoApproveBlockedRef.current !== previewId) {
+        autoApproveBlockedRef.current = previewId;
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: "⚠ AI Wallet Guard flagged this staking transaction as high-risk. Auto-approve was skipped — please review the details and confirm or cancel.",
+          ts: Date.now(),
+        });
+      }
+      return;
     }
+    handleConfirmStake();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, stakePreviewStatus, pendingStake, pendingMultiStep, isScanning]);
+  }, [autoApprove, stakePreviewStatus, pendingStake, pendingMultiStep, isScanning, securityAnalysis]);
 
   useEffect(() => {
     if (autoApprove && scheduleExecStatus === "ready" && pendingScheduledExec) {
@@ -1107,10 +1152,36 @@ export function ChatInterface() {
     const step = resolvedStepsRef.current[multiStepIndex];
     if (!step) return;
     const currentStatus = multiStepStatuses[multiStepIndex];
-    if (currentStatus !== "ready") return;
+    if (currentStatus !== "ready" || isScanning) return;
+
+    if (shouldBlockAutoApprove(securityAnalysis)) {
+      const previewId = `multistep:${multiStepIndex}:${step.kind}`;
+      if (autoApproveBlockedRef.current !== previewId) {
+        autoApproveBlockedRef.current = previewId;
+        appendMessage({
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: `⚠ Step ${multiStepIndex + 1} was flagged as high-risk by AI Wallet Guard. Auto-approve paused — review and confirm to continue the chain.`,
+          ts: Date.now(),
+        });
+      }
+      return;
+    }
     handleMultiStepConfirmCurrent();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoApprove, multiStepStatuses, multiStepIndex, pendingMultiStep]);
+  }, [autoApprove, multiStepStatuses, multiStepIndex, pendingMultiStep, isScanning, securityAnalysis]);
+
+  // Reset the warn-once gate whenever the active preview clears or the multi-step cursor advances.
+  // Without this, cancelling a risky preview and starting another identical one wouldn't re-emit the warning.
+  useEffect(() => {
+    if (!pendingSend && !pendingSwap && !pendingStake && !pendingMultiStep) {
+      autoApproveBlockedRef.current = null;
+    }
+  }, [pendingSend, pendingSwap, pendingStake, pendingMultiStep]);
+
+  useEffect(() => {
+    autoApproveBlockedRef.current = null;
+  }, [multiStepIndex]);
 
   function persistMessage(sessionId: string, msg: Message) {
     if (msg.id === "welcome") return;
